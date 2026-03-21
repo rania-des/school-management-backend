@@ -1,0 +1,96 @@
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import morgan from 'morgan';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+import { globalRateLimit, authRateLimit } from './middleware/rateLimit.middleware';
+import { errorHandler, notFound } from './middleware/error.middleware';
+
+// Routes
+import authRoutes from './modules/auth/auth.routes';
+import usersRoutes from './modules/users/users.routes';
+import gradesRoutes from './modules/grades/grades.routes';
+import scheduleRoutes from './modules/schedule/schedule.routes';
+import assignmentsRoutes from './modules/assignments/assignments.routes';
+import attendanceRoutes from './modules/attendance/attendance.routes';
+import messagesRoutes from './modules/messages/messages.routes';
+import notificationsRoutes from './modules/notifications/notifications.routes';
+import announcementsRoutes from './modules/announcements/announcements.routes';
+import paymentsRoutes from './modules/payments/payments.routes';
+import canteenRoutes from './modules/canteen/canteen.routes';
+import meetingsRoutes from './modules/meetings/meetings.routes';
+import analyticsRoutes from './modules/analytics/analytics.routes';
+import adminRoutes from './modules/admin/admin.routes';
+
+const app = express();
+const PORT = parseInt(process.env.PORT || '3000', 10);
+
+// ==================== MIDDLEWARE ====================
+
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+}));
+
+app.use(cors({
+  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
+}));
+
+app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true }));
+app.use(globalRateLimit);
+
+// ==================== HEALTH CHECK ====================
+
+app.get('/health', (_req, res) => {
+  res.json({
+    status: 'ok',
+    version: '1.0.0',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV,
+  });
+});
+
+// ==================== API ROUTES ====================
+
+const API = '/api/v1';
+
+app.use(`${API}/auth`, authRateLimit, authRoutes);
+app.use(`${API}/users`, usersRoutes);
+app.use(`${API}/grades`, gradesRoutes);
+app.use(`${API}/schedule`, scheduleRoutes);
+app.use(`${API}/assignments`, assignmentsRoutes);
+app.use(`${API}/attendance`, attendanceRoutes);
+app.use(`${API}/messages`, messagesRoutes);
+app.use(`${API}/notifications`, notificationsRoutes);
+app.use(`${API}/announcements`, announcementsRoutes);
+app.use(`${API}/payments`, paymentsRoutes);
+app.use(`${API}/canteen`, canteenRoutes);
+app.use(`${API}/meetings`, meetingsRoutes);
+app.use(`${API}/analytics`, analyticsRoutes);
+app.use(`${API}/admin`, adminRoutes);
+
+// ==================== ERROR HANDLING ====================
+
+app.use(notFound);
+app.use(errorHandler);
+
+// ==================== START SERVER ====================
+
+app.listen(PORT, () => {
+  console.log(`
+╔════════════════════════════════════════════╗
+║     School Management Platform API        ║
+║     Running on port ${PORT}                  ║
+║     Environment: ${process.env.NODE_ENV?.padEnd(16)}    ║
+╚════════════════════════════════════════════╝
+  `);
+});
+
+export default app;
