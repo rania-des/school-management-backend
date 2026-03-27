@@ -31,11 +31,19 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 
 // ==================== MIDDLEWARE ====================
 app.use(cors({
-  origin: [
-    'http://localhost:5173',
-    'https://school-frontend-wine.vercel.app',  
-    /\.vercel\.app$/,
-  ],
+  origin: function(origin, callback) {
+    const allowed = [
+      'http://localhost:5173',
+      'https://school-frontend-wine.vercel.app',
+      process.env.FRONTEND_URL,
+    ].filter(Boolean);
+    
+    if (!origin || allowed.includes(origin) || /\.vercel\.app$/.test(origin || '')) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
