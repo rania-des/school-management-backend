@@ -1,100 +1,100 @@
-import { Router } from 'express';
-import { Request, Response, NextFunction } from 'express';
-import { z } from 'zod';
-import { supabaseAdmin } from '../../config/supabase';
-import { authenticate } from '../../middleware/auth.middleware';
-import { AppError } from '../../middleware/error.middleware';
-import { successResponse, getPagination, paginate } from '../../utils/pagination';
+// src/routes/notifications.routes.ts
+import { Router, Request, Response } from 'express';
+import { supabase } from '../config/supabase';
+import { authenticate } from '../middleware/auth.middleware';
 
 const router = Router();
-router.use(authenticate);
 
-// GET /notifications
-router.get('/', async (req: Request, res: Response, next: NextFunction) => {
+// GET /notifications — récupérer mes notifications
+router.get('/', authenticate, async (req: Request, res: Response) => {
   try {
-    const { page, limit, offset } = getPagination(req);
-    const { isRead, type } = req.query;
+    const userId = (req as any).user.id;
 
-    let query = supabaseAdmin
+    const { data, error } = await supabase
       .from('notifications')
-      .select('*', { count: 'exact' })
-      .eq('recipient_id', req.user!.id)
+      .select('*')
+      .eq('user_id', userId)
       .order('created_at', { ascending: false })
-      .range(offset, offset + limit - 1);
+      .limit(50);
 
-    if (isRead !== undefined) query = query.eq('is_read', isRead === 'true');
-    if (type) query = query.eq('type', type);
-
-    const { data, count, error } = await query;
-    if (error) throw new AppError('Failed to fetch notifications', 500);
-
-    return res.json(paginate(data || [], count || 0, { page, limit, offset }));
-  } catch (err) {
-    return next(err);
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// GET /notifications/unread-count
-router.get('/unread-count', async (req: Request, res: Response, next: NextFunction) => {
+// GET /notifications/unread-count — nombre de non-lus
+router.get('/unread-count', authenticate, async (req: Request, res: Response) => {
   try {
-    const { count, error } = await supabaseAdmin
+    const userId = (req as any).user.id;
+
+    const { count, error } = await supabase
       .from('notifications')
       .select('*', { count: 'exact', head: true })
-      .eq('recipient_id', req.user!.id)
+      .eq('user_id', userId)
       .eq('is_read', false);
 
-    if (error) throw new AppError('Failed to fetch count', 500);
-    return res.json(successResponse({ count: count || 0 }));
-  } catch (err) {
-    return next(err);
+    if (error) throw error;
+    res.json({ success: true, data: { count: count || 0 } });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// PATCH /notifications/:id/read
-router.patch('/:id/read', async (req: Request, res: Response, next: NextFunction) => {
+// PATCH /notifications/:id/read — marquer comme lu
+router.patch('/:id/read', authenticate, async (req: Request, res: Response) => {
   try {
-    const { data, error } = await supabaseAdmin
-      .from('notifications')
-      .update({ is_read: true, read_at: new Date().toISOString() })
-      .eq('id', req.params.id)
-      .eq('recipient_id', req.user!.id)
-      .select()
-      .single();
+    const userId = (req as any).user.id;
+    const { id } = req.params;
 
-    if (error || !data) throw new AppError('Notification not found', 404);
-    return res.json(successResponse(data));
-  } catch (err) {
-    return next(err);
+    const { error } = await supabase
+      .from('notifications')
+      .update({ is_read: true })
+      .eq('id', id)
+      .eq('user_id', userId);
+
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// PATCH /notifications/read-all
-router.patch('/read-all', async (req: Request, res: Response, next: NextFunction) => {
+// PATCH /notifications/read-all — tout marquer comme lu
+router.patch('/read-all', authenticate, async (req: Request, res: Response) => {
   try {
-    const { error } = await supabaseAdmin
+    const userId = (req as any).user.id;
+
+    const { error } = await supabase
       .from('notifications')
-      .update({ is_read: true, read_at: new Date().toISOString() })
-      .eq('recipient_id', req.user!.id)
+      .update({ is_read: true })
+      .eq('user_id', userId)
       .eq('is_read', false);
 
-    if (error) throw new AppError('Failed to mark all as read', 500);
-    return res.json(successResponse(null, 'All notifications marked as read'));
-  } catch (err) {
-    return next(err);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// DELETE /notifications/:id
-router.delete('/:id', async (req: Request, res: Response, next: NextFunction) => {
+// DELETE /notifications/:id — supprimer une notification
+router.delete('/:id', authenticate, async (req: Request, res: Response) => {
   try {
-    await supabaseAdmin
+    const userId = (req as any).user.id;
+    const { id } = req.params;
+
+    const { error } = await supabase
       .from('notifications')
       .delete()
-      .eq('id', req.params.id)
-      .eq('recipient_id', req.user!.id);
-    return res.status(204).send();
-  } catch (err) {
-    return next(err);
+      .eq('id', id)
+      .eq('user_id', userId);
+
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 

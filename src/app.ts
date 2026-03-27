@@ -3,6 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
+import cron from 'node-cron';
 
 dotenv.config();
 
@@ -29,7 +30,16 @@ const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 // ==================== MIDDLEWARE ====================
-
+app.use(cors({
+  origin: [
+    'http://localhost:5173',
+    'https://school-frontend-wine.vercel.app ', 
+    /\.vercel\.app$/,
+  ],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
+}));
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
 }));
@@ -80,6 +90,32 @@ app.use(`${API}/admin`, adminRoutes);
 
 app.use(notFound);
 app.use(errorHandler);
+
+
+// Vérification des paiements en retard chaque jour à 9h
+cron.schedule('0 9 * * *', async () => {
+  const today = new Date().toISOString().split('T')[0];
+  const { data: overduePayments } = await supabaseAdmin
+    .from('payments')
+    .select('*, students(id, profile_id, profiles(first_name, last_name))')
+    .eq('status', 'pending')
+    .lt('due_date', today);
+
+  for (const payment of overduePayments || []) {
+    await supabaseAdmin.from('payments').update({ status: 'overdue' }).eq('id', payment.id);
+    // Notifier les parents
+    const parentIds = await getStudentParentProfileIds(payment.student_id);
+    for (const parentId of parentIds) {
+      await supabaseAdmin.from('notifications').insert({
+        recipient_id: parentId,
+        type: 'payment',
+        title: '💳 Paiement en retard',
+        body: `Paiement de ${payment.amount} TND en retard pour ${payment.students?.profiles?.first_name}`,
+        data: { paymentId: payment.id, amount: payment.amount },
+      });
+    }
+  }
+});
 
 // ==================== START SERVER ====================
 
