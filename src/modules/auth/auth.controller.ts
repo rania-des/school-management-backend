@@ -22,7 +22,7 @@ export class AuthController {
   async register(req: Request, res: Response, next: NextFunction) {
     try {
       const body = registerSchema.parse(req.body);
-      const result = await authService.register(body);
+      const result = await authService.register(body as any);
       return res.status(201).json(result);
     } catch (err) {
       return next(err);
