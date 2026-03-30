@@ -19,7 +19,7 @@ export declare const getPagination: (req: Request) => PaginationParams;
 export declare const paginate: <T>(data: T[], total: number, params: PaginationParams) => PaginatedResponse<T>;
 export declare const successResponse: <T>(data: T, message?: string) => {
     success: boolean;
-    message: string | undefined;
+    message: string;
     data: T;
 };
 //# sourceMappingURL=pagination.d.ts.map

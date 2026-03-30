@@ -5,7 +5,7 @@ export declare class AuthService {
         expiresIn: number;
         user: {
             id: string;
-            email: string | undefined;
+            email: string;
             role: any;
             firstName: any;
             lastName: any;

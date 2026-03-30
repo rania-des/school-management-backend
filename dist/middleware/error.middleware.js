@@ -3,8 +3,6 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.notFound = exports.errorHandler = exports.AppError = void 0;
 const zod_1 = require("zod");
 class AppError extends Error {
-    statusCode;
-    isOperational;
     constructor(message, statusCode) {
         super(message);
         this.statusCode = statusCode;

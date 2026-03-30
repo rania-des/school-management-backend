@@ -13,7 +13,6 @@ export class AuthService {
       throw new AppError('Invalid email or password', 401);
     }
 
-    // Fetch full profile
     const { data: profile } = await supabaseAdmin
       .from('profiles')
       .select('*')
@@ -73,42 +72,67 @@ export class AuthService {
     });
 
     if (profileError) {
-      // Rollback auth user
       await supabaseAdmin.auth.admin.deleteUser(userId);
       throw new AppError('Failed to create profile', 500);
     }
 
-    // Create role-specific record
-    await this.createRoleRecord(userId, payload.role);
+    // Create role-specific record and get its ID
+    const roleId = await this.createRoleRecord(userId, payload.role);
 
     // Send welcome email
     sendWelcomeEmail(payload.email, payload.firstName, payload.role).catch(console.error);
 
-    return { message: 'Account created successfully', userId };
+    // ✅ Return both userId (profile_id) AND roleId (students.id / parents.id / teachers.id)
+    return {
+      message: 'Account created successfully',
+      userId,
+      roleId,
+    };
   }
 
-  private async createRoleRecord(profileId: string, role: string) {
+  private async createRoleRecord(profileId: string, role: string): Promise<string | null> {
     if (role === 'student') {
       const studentNumber = `STU-${Date.now()}`;
-      await supabaseAdmin.from('students').insert({
-        profile_id: profileId,
-        student_number: studentNumber,
-        enrollment_date: new Date().toISOString().split('T')[0],
-      });
+      const { data } = await supabaseAdmin
+        .from('students')
+        .insert({
+          profile_id: profileId,
+          student_number: studentNumber,
+          enrollment_date: new Date().toISOString().split('T')[0],
+        })
+        .select('id')
+        .single();
+      return data?.id || null;
+
     } else if (role === 'teacher') {
       const employeeNumber = `TCH-${Date.now()}`;
-      await supabaseAdmin.from('teachers').insert({
-        profile_id: profileId,
-        employee_number: employeeNumber,
-        hire_date: new Date().toISOString().split('T')[0],
-      });
+      const { data } = await supabaseAdmin
+        .from('teachers')
+        .insert({
+          profile_id: profileId,
+          employee_number: employeeNumber,
+          hire_date: new Date().toISOString().split('T')[0],
+        })
+        .select('id')
+        .single();
+      return data?.id || null;
+
     } else if (role === 'parent') {
-      await supabaseAdmin.from('parents').insert({ profile_id: profileId });
+      const { data } = await supabaseAdmin
+        .from('parents')
+        .insert({ profile_id: profileId })
+        .select('id')
+        .single();
+      return data?.id || null;
     }
+
+    return null;
   }
 
   async refreshToken(refreshToken: string) {
-    const { data, error } = await supabaseAdmin.auth.refreshSession({ refresh_token: refreshToken });
+    const { data, error } = await supabaseAdmin.auth.refreshSession({
+      refresh_token: refreshToken,
+    });
 
     if (error || !data.session) {
       throw new AppError('Invalid refresh token', 401);
@@ -162,8 +186,9 @@ export class AuthService {
       throw new AppError('Profile not found', 404);
     }
 
-    // Get role-specific data
     let roleData = null;
+    let roleId = null;
+
     if (profile.role === 'student') {
       const { data } = await supabaseAdmin
         .from('students')
@@ -171,6 +196,7 @@ export class AuthService {
         .eq('profile_id', userId)
         .single();
       roleData = data;
+      roleId = data?.id;
     } else if (profile.role === 'teacher') {
       const { data } = await supabaseAdmin
         .from('teachers')
@@ -178,6 +204,7 @@ export class AuthService {
         .eq('profile_id', userId)
         .single();
       roleData = data;
+      roleId = data?.id;
     } else if (profile.role === 'parent') {
       const { data } = await supabaseAdmin
         .from('parents')
@@ -185,6 +212,7 @@ export class AuthService {
         .eq('profile_id', userId)
         .single();
       roleData = data;
+      roleId = data?.id;
     }
 
     return {
@@ -198,6 +226,7 @@ export class AuthService {
       address: profile.address,
       avatarUrl: profile.avatar_url,
       dateOfBirth: profile.date_of_birth,
+      roleId,
       roleData,
     };
   }

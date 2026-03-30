@@ -8,13 +8,61 @@ const error_middleware_1 = require("../../middleware/error.middleware");
 const pagination_1 = require("../../utils/pagination");
 const router = (0, express_1.Router)();
 router.use(auth_middleware_1.authenticate, (0, auth_middleware_1.authorize)('admin'));
+// ==================== SECTIONS ====================
+router.get('/sections', async (req, res, next) => {
+    try {
+        const { data, error } = await supabase_1.supabaseAdmin
+            .from('sections')
+            .select('*')
+            .order('name');
+        if (error) {
+            // If sections table doesn't exist, return default sections
+            return res.json((0, pagination_1.successResponse)([
+                { id: '1', name: 'Mathématiques', code: 'MATH' },
+                { id: '2', name: 'Sciences', code: 'SCI' },
+                { id: '3', name: 'Lettres', code: 'LET' },
+                { id: '4', name: 'Économie', code: 'ECO' },
+                { id: '5', name: 'Informatique', code: 'INFO' },
+                { id: '6', name: 'Technique', code: 'TECH' },
+            ]));
+        }
+        return res.json((0, pagination_1.successResponse)(data || []));
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+// ==================== LEVELS ====================
+router.get('/levels', async (req, res, next) => {
+    try {
+        const { data, error } = await supabase_1.supabaseAdmin
+            .from('levels')
+            .select('*')
+            .order('order_index');
+        if (error) {
+            // If levels table doesn't exist, return default levels
+            return res.json((0, pagination_1.successResponse)([
+                { id: '1', name: '1ère année', order_index: 1 },
+                { id: '2', name: '2ème année', order_index: 2 },
+                { id: '3', name: '3ème année', order_index: 3 },
+                { id: '4', name: '4ème année', order_index: 4 },
+                { id: '5', name: 'Terminale', order_index: 5 },
+            ]));
+        }
+        return res.json((0, pagination_1.successResponse)(data || []));
+    }
+    catch (err) {
+        return next(err);
+    }
+});
 // ==================== CLASSES ====================
 const classSchema = zod_1.z.object({
     name: zod_1.z.string().min(1).max(100),
-    levelId: zod_1.z.string().uuid().optional(),
+    levelId: zod_1.z.string().uuid().optional().nullable(),
+    sectionId: zod_1.z.string().uuid().optional().nullable(),
     academicYearId: zod_1.z.string().uuid(),
     capacity: zod_1.z.number().default(30),
-    room: zod_1.z.string().optional(),
+    room: zod_1.z.string().optional().nullable(),
 });
 router.get('/classes', async (req, res, next) => {
     try {
@@ -22,7 +70,7 @@ router.get('/classes', async (req, res, next) => {
         const { academicYearId, levelId } = req.query;
         let query = supabase_1.supabaseAdmin
             .from('classes')
-            .select(`*, levels(name), academic_years(name)`, { count: 'exact' })
+            .select(`*, academic_years(name, is_current)`, { count: 'exact' })
             .order('name')
             .range(offset, offset + limit - 1);
         if (academicYearId)
@@ -43,11 +91,18 @@ router.post('/classes', async (req, res, next) => {
         const body = classSchema.parse(req.body);
         const { data, error } = await supabase_1.supabaseAdmin
             .from('classes')
-            .insert({ name: body.name, level_id: body.levelId, academic_year_id: body.academicYearId, capacity: body.capacity, room: body.room })
+            .insert({
+            name: body.name,
+            level_id: body.levelId || null,
+            section_id: body.sectionId || null,
+            academic_year_id: body.academicYearId,
+            capacity: body.capacity,
+            room: body.room || null,
+        })
             .select()
             .single();
         if (error)
-            throw new error_middleware_1.AppError('Failed to create class', 500);
+            throw new error_middleware_1.AppError(`Failed to create class: ${error.message}`, 500);
         return res.status(201).json((0, pagination_1.successResponse)(data));
     }
     catch (err) {
@@ -57,8 +112,19 @@ router.post('/classes', async (req, res, next) => {
 router.patch('/classes/:id', async (req, res, next) => {
     try {
         const updates = classSchema.partial().parse(req.body);
+        const mapped = {};
+        if (updates.name)
+            mapped.name = updates.name;
+        if (updates.capacity)
+            mapped.capacity = updates.capacity;
+        if (updates.room !== undefined)
+            mapped.room = updates.room;
+        if (updates.levelId !== undefined)
+            mapped.level_id = updates.levelId;
+        if (updates.sectionId !== undefined)
+            mapped.section_id = updates.sectionId;
         const { data, error } = await supabase_1.supabaseAdmin
-            .from('classes').update(updates).eq('id', req.params.id).select().single();
+            .from('classes').update(mapped).eq('id', req.params.id).select().single();
         if (error || !data)
             throw new error_middleware_1.AppError('Class not found', 404);
         return res.json((0, pagination_1.successResponse)(data));
@@ -83,10 +149,15 @@ const subjectSchema = zod_1.z.object({
     coefficient: zod_1.z.number().positive().default(1),
     color: zod_1.z.string().regex(/^#[0-9A-Fa-f]{6}$/).default('#3B82F6'),
     description: zod_1.z.string().optional(),
+    sectionId: zod_1.z.string().uuid().optional().nullable(),
 });
 router.get('/subjects', async (req, res, next) => {
     try {
-        const { data, error } = await supabase_1.supabaseAdmin.from('subjects').select('*').order('name');
+        const { sectionId } = req.query;
+        let query = supabase_1.supabaseAdmin.from('subjects').select('*').order('name');
+        if (sectionId)
+            query = query.eq('section_id', sectionId);
+        const { data, error } = await query;
         if (error)
             throw new error_middleware_1.AppError('Failed to fetch subjects', 500);
         return res.json((0, pagination_1.successResponse)(data));
@@ -98,7 +169,18 @@ router.get('/subjects', async (req, res, next) => {
 router.post('/subjects', async (req, res, next) => {
     try {
         const body = subjectSchema.parse(req.body);
-        const { data, error } = await supabase_1.supabaseAdmin.from('subjects').insert(body).select().single();
+        const { data, error } = await supabase_1.supabaseAdmin
+            .from('subjects')
+            .insert({
+            name: body.name,
+            code: body.code,
+            coefficient: body.coefficient,
+            color: body.color,
+            description: body.description,
+            section_id: body.sectionId || null,
+        })
+            .select()
+            .single();
         if (error)
             throw new error_middleware_1.AppError('Failed to create subject', 500);
         return res.status(201).json((0, pagination_1.successResponse)(data));
@@ -227,7 +309,8 @@ router.delete('/parent-student/:id', async (req, res, next) => {
 // ==================== ACADEMIC YEARS ====================
 router.get('/academic-years', async (req, res, next) => {
     try {
-        const { data, error } = await supabase_1.supabaseAdmin.from('academic_years').select('*').order('start_date', { ascending: false });
+        const { data, error } = await supabase_1.supabaseAdmin
+            .from('academic_years').select('*').order('start_date', { ascending: false });
         if (error)
             throw new error_middleware_1.AppError('Failed to fetch years', 500);
         return res.json((0, pagination_1.successResponse)(data));
@@ -244,7 +327,6 @@ router.post('/academic-years', async (req, res, next) => {
             endDate: zod_1.z.string(),
             isCurrent: zod_1.z.boolean().default(false),
         }).parse(req.body);
-        // If setting as current, unset others first
         if (body.isCurrent) {
             await supabase_1.supabaseAdmin.from('academic_years').update({ is_current: false }).eq('is_current', true);
         }
@@ -256,6 +338,68 @@ router.post('/academic-years', async (req, res, next) => {
         if (error)
             throw new error_middleware_1.AppError('Failed to create academic year', 500);
         return res.status(201).json((0, pagination_1.successResponse)(data));
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+router.patch('/academic-years/:id', async (req, res, next) => {
+    try {
+        const body = zod_1.z.object({
+            name: zod_1.z.string().optional(),
+            startDate: zod_1.z.string().optional(),
+            endDate: zod_1.z.string().optional(),
+            isCurrent: zod_1.z.boolean().optional(),
+        }).parse(req.body);
+        if (body.isCurrent) {
+            await supabase_1.supabaseAdmin.from('academic_years').update({ is_current: false }).eq('is_current', true);
+        }
+        const mapped = {};
+        if (body.name)
+            mapped.name = body.name;
+        if (body.startDate)
+            mapped.start_date = body.startDate;
+        if (body.endDate)
+            mapped.end_date = body.endDate;
+        if (body.isCurrent !== undefined)
+            mapped.is_current = body.isCurrent;
+        const { data, error } = await supabase_1.supabaseAdmin
+            .from('academic_years').update(mapped).eq('id', req.params.id).select().single();
+        if (error || !data)
+            throw new error_middleware_1.AppError('Academic year not found', 404);
+        return res.json((0, pagination_1.successResponse)(data));
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+router.delete('/academic-years/:id', async (req, res, next) => {
+    try {
+        await supabase_1.supabaseAdmin.from('academic_years').delete().eq('id', req.params.id);
+        return res.status(204).send();
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+// ==================== USERS (admin view) ====================
+router.get('/users', async (req, res, next) => {
+    try {
+        const { role, search } = req.query;
+        const { page, limit, offset } = (0, pagination_1.getPagination)(req);
+        let query = supabase_1.supabaseAdmin
+            .from('profiles')
+            .select('*', { count: 'exact' })
+            .order('created_at', { ascending: false })
+            .range(offset, offset + limit - 1);
+        if (role)
+            query = query.eq('role', role);
+        if (search)
+            query = query.or(`first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%`);
+        const { data, count, error } = await query;
+        if (error)
+            throw new error_middleware_1.AppError('Failed to fetch users', 500);
+        return res.json((0, pagination_1.paginate)(data || [], count || 0, { page, limit, offset }));
     }
     catch (err) {
         return next(err);
@@ -291,7 +435,7 @@ router.patch('/establishment', async (req, res, next) => {
         return next(err);
     }
 });
-// ==================== STUDENT ENROLLMENT IN CLASS ====================
+// ==================== STUDENT ENROLLMENT ====================
 router.patch('/students/:studentId/enroll', async (req, res, next) => {
     try {
         const { classId } = zod_1.z.object({ classId: zod_1.z.string().uuid() }).parse(req.body);
