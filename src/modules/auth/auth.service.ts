@@ -65,20 +65,26 @@ export class AuthService {
   private async createRoleRecord(profileId: string, role: string): Promise<void> {
     if (role === 'student') {
       const studentNumber = `STU-${Date.now()}`;
-      await supabaseAdmin.from('students').insert({
+      const { error } = await supabaseAdmin.from('students').insert({
         profile_id: profileId,
         student_number: studentNumber,
         enrollment_date: new Date().toISOString().split('T')[0],
       });
+      if (error) console.error('❌ Error creating student record:', error.message, error.code);
+      else console.log('✅ Student record created for', profileId);
     } else if (role === 'teacher') {
       const employeeNumber = `TCH-${Date.now()}`;
-      await supabaseAdmin.from('teachers').insert({
+      const { error } = await supabaseAdmin.from('teachers').insert({
         profile_id: profileId,
         employee_number: employeeNumber,
         hire_date: new Date().toISOString().split('T')[0],
       });
+      if (error) console.error('❌ Error creating teacher record:', error.message, error.code);
+      else console.log('✅ Teacher record created for', profileId);
     } else if (role === 'parent') {
-      await supabaseAdmin.from('parents').insert({ profile_id: profileId });
+      const { error } = await supabaseAdmin.from('parents').insert({ profile_id: profileId });
+      if (error) console.error('❌ Error creating parent record:', error.message, error.code);
+      else console.log('✅ Parent record created for', profileId);
     }
   }
 

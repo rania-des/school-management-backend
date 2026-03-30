@@ -26,6 +26,7 @@ import analyticsRoutes from './modules/analytics/analytics.routes';
 import adminRoutes from './modules/admin/admin.routes';
 
 const app = express();
+app.set('trust proxy', 1);
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 // ==================== MIDDLEWARE ====================
