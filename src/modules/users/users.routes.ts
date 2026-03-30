@@ -14,35 +14,91 @@ router.use(authenticate);
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 const updateProfileSchema = z.object({
-  firstName: z.string().min(2).max(100).optional(),
-  lastName: z.string().min(2).max(100).optional(),
+  firstName: z.string().min(1).max(100).optional(),
+  lastName: z.string().min(1).max(100).optional(),
   phone: z.string().optional(),
   address: z.string().optional(),
   gender: z.enum(['male', 'female']).optional(),
   dateOfBirth: z.string().optional(),
+  specialization: z.string().optional(),
 });
 
-// GET /users/me/profile - update own profile
+// ── Helper: get roleId for a profile ─────────────────────────────────────────
+async function getRoleId(profileId: string, role: string): Promise<string | null> {
+  if (role === 'student') {
+    const { data } = await supabaseAdmin.from('students').select('id').eq('profile_id', profileId).single();
+    return data?.id || null;
+  } else if (role === 'teacher') {
+    const { data } = await supabaseAdmin.from('teachers').select('id').eq('profile_id', profileId).single();
+    return data?.id || null;
+  } else if (role === 'parent') {
+    const { data } = await supabaseAdmin.from('parents').select('id').eq('profile_id', profileId).single();
+    return data?.id || null;
+  }
+  return null;
+}
+
+// ── Helper: get full roleData for a profile ───────────────────────────────────
+async function getRoleData(profileId: string, role: string): Promise<any> {
+  if (role === 'student') {
+    const { data } = await supabaseAdmin
+      .from('students')
+      .select(`
+        *,
+        classes(name, academic_years(name)),
+        parent_student(
+          id, is_primary, relationship,
+          parents(
+            id, profile_id,
+            profiles(first_name, last_name, email, phone)
+          )
+        )
+      `)
+      .eq('profile_id', profileId)
+      .single();
+    return data;
+  } else if (role === 'teacher') {
+    const { data } = await supabaseAdmin
+      .from('teachers')
+      .select('*')
+      .eq('profile_id', profileId)
+      .single();
+    return data;
+  } else if (role === 'parent') {
+    const { data } = await supabaseAdmin
+      .from('parents')
+      .select(`
+        *,
+        parent_student(
+          id, is_primary,
+          students(
+            id, student_number,
+            profiles(first_name, last_name),
+            classes(name)
+          )
+        )
+      `)
+      .eq('profile_id', profileId)
+      .single();
+    return data;
+  }
+  return null;
+}
+
+// GET /users/me/profile
 router.get('/me/profile', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { data, error } = await supabaseAdmin
-      .from('profiles')
-      .select('*')
-      .eq('id', req.user!.id)
-      .single();
-
+      .from('profiles').select('*').eq('id', req.user!.id).single();
     if (error || !data) throw new AppError('Profile not found', 404);
     return res.json(successResponse(data));
-  } catch (err) {
-    return next(err);
-  }
+  } catch (err) { return next(err); }
 });
 
 // PATCH /users/me/profile
 router.patch('/me/profile', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = updateProfileSchema.parse(req.body);
-
     const updateData: Record<string, unknown> = {};
     if (body.firstName) updateData.first_name = body.firstName;
     if (body.lastName) updateData.last_name = body.lastName;
@@ -52,42 +108,67 @@ router.patch('/me/profile', async (req: Request, res: Response, next: NextFuncti
     if (body.dateOfBirth) updateData.date_of_birth = body.dateOfBirth;
 
     const { data, error } = await supabaseAdmin
-      .from('profiles')
-      .update(updateData)
-      .eq('id', req.user!.id)
-      .select()
-      .single();
-
+      .from('profiles').update(updateData).eq('id', req.user!.id).select().single();
     if (error) throw new AppError('Failed to update profile', 500);
     return res.json(successResponse(data, 'Profile updated successfully'));
-  } catch (err) {
-    return next(err);
-  }
+  } catch (err) { return next(err); }
 });
 
 // POST /users/me/avatar
 router.post('/me/avatar', upload.single('avatar'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (!req.file) throw new AppError('No file uploaded', 400);
-
     const url = await uploadFile(STORAGE_BUCKETS.AVATARS, req.file, req.user!.id);
-
     const { data } = await supabaseAdmin
-      .from('profiles')
-      .update({ avatar_url: url })
-      .eq('id', req.user!.id)
-      .select('avatar_url')
-      .single();
-
+      .from('profiles').update({ avatar_url: url }).eq('id', req.user!.id).select('avatar_url').single();
     return res.json(successResponse({ avatarUrl: data?.avatar_url }));
-  } catch (err) {
-    return next(err);
-  }
+  } catch (err) { return next(err); }
+});
+
+// PATCH /users/:id/profile (admin)
+router.patch('/:id/profile', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const body = updateProfileSchema.parse(req.body);
+    const updateData: Record<string, unknown> = {};
+    if (body.firstName) updateData.first_name = body.firstName;
+    if (body.lastName) updateData.last_name = body.lastName;
+    if (body.phone !== undefined) updateData.phone = body.phone;
+    if (body.address !== undefined) updateData.address = body.address;
+    if (body.gender) updateData.gender = body.gender;
+    if (body.dateOfBirth) updateData.date_of_birth = body.dateOfBirth;
+
+    const { data, error } = await supabaseAdmin
+      .from('profiles').update(updateData).eq('id', req.params.id).select().single();
+    if (error || !data) throw new AppError('User not found', 404);
+
+    // Also update teacher specialization if provided
+    if (body.specialization && data.role === 'teacher') {
+      await supabaseAdmin.from('teachers')
+        .update({ specialization: body.specialization })
+        .eq('profile_id', req.params.id);
+    }
+
+    return res.json(successResponse(data, 'Profile updated'));
+  } catch (err) { return next(err); }
+});
+
+// PATCH /users/:id/role (admin)
+router.patch('/:id/role', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { role } = z.object({
+      role: z.enum(['student', 'teacher', 'parent', 'admin'])
+    }).parse(req.body);
+
+    const { data, error } = await supabaseAdmin
+      .from('profiles').update({ role }).eq('id', req.params.id).select().single();
+    if (error || !data) throw new AppError('User not found', 404);
+    return res.json(successResponse(data, 'Role updated'));
+  } catch (err) { return next(err); }
 });
 
 // ==================== ADMIN ROUTES ====================
 
-// GET /users - list all users (admin only)
+// GET /users — list with roleId included
 router.get('/', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { page, limit, offset } = getPagination(req);
@@ -99,69 +180,71 @@ router.get('/', authorize('admin'), async (req: Request, res: Response, next: Ne
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
 
-    if (role) query = query.eq('role', role);
-    if (search) {
-      query = query.or(`first_name.ilike.%${search}%,last_name.ilike.%${search}%`);
-    }
+    if (role) query = query.eq('role', role as string);
+    if (search) query = query.or(`first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%`);
 
     const { data, count, error } = await query;
     if (error) throw new AppError('Failed to fetch users', 500);
 
-    return res.json(paginate(data || [], count || 0, { page, limit, offset }));
-  } catch (err) {
-    return next(err);
-  }
+    // ✅ Add roleId and basic roleData for each user
+    const enriched = await Promise.all((data || []).map(async (profile: any) => {
+      const roleId = await getRoleId(profile.id, profile.role);
+      let className = null;
+
+      if (profile.role === 'student' && roleId) {
+        const { data: student } = await supabaseAdmin
+          .from('students').select('classes(name)').eq('id', roleId).single();
+        className = (student as any)?.classes?.name || null;
+      }
+
+      return {
+        ...profile,
+        roleId,
+        roleData: className ? { classes: { name: className } } : undefined,
+      };
+    }));
+
+    return res.json(paginate(enriched, count || 0, { page, limit, offset }));
+  } catch (err) { return next(err); }
 });
 
-// GET /users/:id (admin only)
+// GET /users/:id — full profile with roleId and roleData
 router.get('/:id', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { data, error } = await supabaseAdmin
-      .from('profiles')
-      .select('*')
-      .eq('id', req.params.id)
-      .single();
-
+      .from('profiles').select('*').eq('id', req.params.id).single();
     if (error || !data) throw new AppError('User not found', 404);
-    return res.json(successResponse(data));
-  } catch (err) {
-    return next(err);
-  }
+
+    const roleId = await getRoleId(data.id, data.role);
+    const roleData = await getRoleData(data.id, data.role);
+
+    return res.json(successResponse({
+      ...data,
+      roleId,
+      roleData,
+    }));
+  } catch (err) { return next(err); }
 });
 
-// PATCH /users/:id/status (admin: activate/deactivate)
+// PATCH /users/:id/status (admin)
 router.patch('/:id/status', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { isActive } = z.object({ isActive: z.boolean() }).parse(req.body);
-
     const { data, error } = await supabaseAdmin
-      .from('profiles')
-      .update({ is_active: isActive })
-      .eq('id', req.params.id)
-      .select()
-      .single();
-
+      .from('profiles').update({ is_active: isActive }).eq('id', req.params.id).select().single();
     if (error || !data) throw new AppError('User not found', 404);
     return res.json(successResponse(data, `User ${isActive ? 'activated' : 'deactivated'}`));
-  } catch (err) {
-    return next(err);
-  }
+  } catch (err) { return next(err); }
 });
 
-// DELETE /users/:id (admin only)
+// DELETE /users/:id (admin)
 router.delete('/:id', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    if (req.params.id === req.user!.id) {
-      throw new AppError('Cannot delete your own account', 400);
-    }
-
+    if (req.params.id === req.user!.id) throw new AppError('Cannot delete your own account', 400);
     const { error } = await supabaseAdmin.auth.admin.deleteUser(req.params.id);
     if (error) throw new AppError('Failed to delete user', 500);
-
     return res.status(204).send();
-  } catch (err) {
-    return next(err);
-  }
+  } catch (err) { return next(err); }
 });
 
 export default router;
