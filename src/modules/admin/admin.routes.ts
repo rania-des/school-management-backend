@@ -276,24 +276,21 @@ router.post('/parent-student', async (req: Request, res: Response, next: NextFun
       isPrimary: z.boolean().default(false),
     }).parse(req.body);
 
-    // ✅ parentId et studentId peuvent être soit un profile_id soit un role_id
-    // On cherche dans les deux tables pour trouver le bon ID
+    // Résoudre le vrai parents.id depuis profile_id si nécessaire
     let finalParentId = body.parentId;
-    let finalStudentId = body.studentId;
-
-    // Chercher parent par profile_id si pas trouvé directement
-    const { data: parentByRole } = await supabaseAdmin
+    const { data: parentDirect } = await supabaseAdmin
       .from('parents').select('id').eq('id', body.parentId).single();
-    if (!parentByRole) {
+    if (!parentDirect) {
       const { data: parentByProfile } = await supabaseAdmin
         .from('parents').select('id').eq('profile_id', body.parentId).single();
       if (parentByProfile) finalParentId = parentByProfile.id;
     }
 
-    // Chercher student par profile_id si pas trouvé directement
-    const { data: studentByRole } = await supabaseAdmin
+    // Résoudre le vrai students.id depuis profile_id si nécessaire
+    let finalStudentId = body.studentId;
+    const { data: studentDirect } = await supabaseAdmin
       .from('students').select('id').eq('id', body.studentId).single();
-    if (!studentByRole) {
+    if (!studentDirect) {
       const { data: studentByProfile } = await supabaseAdmin
         .from('students').select('id').eq('profile_id', body.studentId).single();
       if (studentByProfile) finalStudentId = studentByProfile.id;
@@ -310,13 +307,12 @@ router.post('/parent-student', async (req: Request, res: Response, next: NextFun
       .select()
       .single();
 
-    if (error) throw new AppError(`Failed to link parent and student: ${error.message}`, 500);
+    if (error) throw new AppError(`Failed to link: ${error.message}`, 500);
     return res.status(201).json(successResponse(data));
   } catch (err) {
     return next(err);
   }
 });
-
 
 // ==================== ACADEMIC YEARS ====================
 
