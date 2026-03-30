@@ -276,24 +276,26 @@ router.post('/parent-student', async (req: Request, res: Response, next: NextFun
       isPrimary: z.boolean().default(false),
     }).parse(req.body);
 
-    // Résoudre le vrai parents.id depuis profile_id si nécessaire
+    // Résoudre parents.id depuis profile_id
     let finalParentId = body.parentId;
     const { data: parentDirect } = await supabaseAdmin
-      .from('parents').select('id').eq('id', body.parentId).single();
+      .from('parents').select('id').eq('id', body.parentId).maybeSingle();
     if (!parentDirect) {
       const { data: parentByProfile } = await supabaseAdmin
-        .from('parents').select('id').eq('profile_id', body.parentId).single();
+        .from('parents').select('id').eq('profile_id', body.parentId).maybeSingle();
       if (parentByProfile) finalParentId = parentByProfile.id;
+      else throw new AppError(`Parent not found for id: ${body.parentId}`, 404);
     }
 
-    // Résoudre le vrai students.id depuis profile_id si nécessaire
+    // Résoudre students.id depuis profile_id
     let finalStudentId = body.studentId;
     const { data: studentDirect } = await supabaseAdmin
-      .from('students').select('id').eq('id', body.studentId).single();
+      .from('students').select('id').eq('id', body.studentId).maybeSingle();
     if (!studentDirect) {
       const { data: studentByProfile } = await supabaseAdmin
-        .from('students').select('id').eq('profile_id', body.studentId).single();
+        .from('students').select('id').eq('profile_id', body.studentId).maybeSingle();
       if (studentByProfile) finalStudentId = studentByProfile.id;
+      else throw new AppError(`Student not found for id: ${body.studentId}`, 404);
     }
 
     const { data, error } = await supabaseAdmin
