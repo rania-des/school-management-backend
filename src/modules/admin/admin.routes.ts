@@ -267,7 +267,6 @@ router.delete('/teacher-assignments/:id', async (req: Request, res: Response, ne
 });
 
 // ==================== PARENT-STUDENT LINKS ====================
-
 router.post('/parent-student', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = z.object({
@@ -277,32 +276,47 @@ router.post('/parent-student', async (req: Request, res: Response, next: NextFun
       isPrimary: z.boolean().default(false),
     }).parse(req.body);
 
+    // ✅ parentId et studentId peuvent être soit un profile_id soit un role_id
+    // On cherche dans les deux tables pour trouver le bon ID
+    let finalParentId = body.parentId;
+    let finalStudentId = body.studentId;
+
+    // Chercher parent par profile_id si pas trouvé directement
+    const { data: parentByRole } = await supabaseAdmin
+      .from('parents').select('id').eq('id', body.parentId).single();
+    if (!parentByRole) {
+      const { data: parentByProfile } = await supabaseAdmin
+        .from('parents').select('id').eq('profile_id', body.parentId).single();
+      if (parentByProfile) finalParentId = parentByProfile.id;
+    }
+
+    // Chercher student par profile_id si pas trouvé directement
+    const { data: studentByRole } = await supabaseAdmin
+      .from('students').select('id').eq('id', body.studentId).single();
+    if (!studentByRole) {
+      const { data: studentByProfile } = await supabaseAdmin
+        .from('students').select('id').eq('profile_id', body.studentId).single();
+      if (studentByProfile) finalStudentId = studentByProfile.id;
+    }
+
     const { data, error } = await supabaseAdmin
       .from('parent_student')
       .insert({
-        parent_id: body.parentId,
-        student_id: body.studentId,
+        parent_id: finalParentId,
+        student_id: finalStudentId,
         relationship: body.relationship,
         is_primary: body.isPrimary,
       })
       .select()
       .single();
 
-    if (error) throw new AppError('Failed to link parent and student', 500);
+    if (error) throw new AppError(`Failed to link parent and student: ${error.message}`, 500);
     return res.status(201).json(successResponse(data));
   } catch (err) {
     return next(err);
   }
 });
 
-router.delete('/parent-student/:id', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    await supabaseAdmin.from('parent_student').delete().eq('id', req.params.id);
-    return res.status(204).send();
-  } catch (err) {
-    return next(err);
-  }
-});
 
 // ==================== ACADEMIC YEARS ====================
 
