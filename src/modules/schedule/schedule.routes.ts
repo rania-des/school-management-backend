@@ -12,21 +12,20 @@ router.use(authenticate);
 const slotSchema = z.object({
   classId: z.string().uuid(),
   subjectId: z.string().uuid(),
-  teacherId: z.string().uuid(),
+  teacherId: z.string().uuid().optional().nullable(),
   academicYearId: z.string().uuid(),
   dayOfWeek: z.enum(['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']),
   startTime: z.string().regex(/^\d{2}:\d{2}$/),
   endTime: z.string().regex(/^\d{2}:\d{2}$/),
-  room: z.string().optional(),
+  room: z.string().optional().nullable(),
 });
 
-// GET /schedule - get schedule for current user's class
+// GET /schedule
 router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     let classId = req.query.classId as string;
     const { academicYearId } = req.query;
 
-    // Resolve classId based on role
     if (!classId) {
       if (req.user!.role === 'student') {
         const { data } = await supabaseAdmin
@@ -49,12 +48,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
 
     let query = supabaseAdmin
       .from('schedule_slots')
-      .select(`
-        *,
-        subjects(name, code, color),
-        teachers(profiles(first_name, last_name)),
-        classes(name)
-      `)
+      .select(`*, subjects(name, code, color), teachers(profiles(first_name, last_name)), classes(name)`)
       .eq('class_id', classId)
       .eq('is_active', true)
       .order('day_of_week')
@@ -65,7 +59,6 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     const { data, error } = await query;
     if (error) throw new AppError('Failed to fetch schedule', 500);
 
-    // Group by day
     const grouped: Record<string, unknown[]> = {};
     (data || []).forEach((slot: any) => {
       if (!grouped[slot.day_of_week]) grouped[slot.day_of_week] = [];
@@ -78,7 +71,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   }
 });
 
-// GET /schedule/teacher - teacher's own schedule
+// GET /schedule/teacher
 router.get('/teacher', authorize('teacher', 'admin'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { academicYearId } = req.query;
@@ -113,22 +106,26 @@ router.get('/teacher', authorize('teacher', 'admin'), async (req: Request, res: 
   }
 });
 
-// POST /schedule - admin creates a slot
+// POST /schedule
 router.post('/', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = slotSchema.parse(req.body);
 
-    // ✅ Résoudre teachers.id depuis profile_id si nécessaire
-    let finalTeacherId = body.teacherId;
-    const { data: teacherDirect } = await supabaseAdmin
-      .from('teachers').select('id').eq('id', body.teacherId).maybeSingle();
-    if (!teacherDirect) {
-      const { data: teacherByProfile } = await supabaseAdmin
-        .from('teachers').select('id').eq('profile_id', body.teacherId).maybeSingle();
-      if (teacherByProfile) finalTeacherId = teacherByProfile.id;
+    // Résoudre teachers.id depuis profile_id si nécessaire
+    let finalTeacherId: string | null = null;
+    if (body.teacherId) {
+      const { data: teacherDirect } = await supabaseAdmin
+        .from('teachers').select('id').eq('id', body.teacherId).maybeSingle();
+      if (teacherDirect) {
+        finalTeacherId = teacherDirect.id;
+      } else {
+        const { data: teacherByProfile } = await supabaseAdmin
+          .from('teachers').select('id').eq('profile_id', body.teacherId).maybeSingle();
+        if (teacherByProfile) finalTeacherId = teacherByProfile.id;
+      }
     }
 
-    // ✅ Conflict check corrigé — chevauchement réel
+    // Conflict check
     const { data: existing } = await supabaseAdmin
       .from('schedule_slots')
       .select('id')
@@ -152,7 +149,7 @@ router.post('/', authorize('admin'), async (req: Request, res: Response, next: N
         day_of_week: body.dayOfWeek,
         start_time: body.startTime,
         end_time: body.endTime,
-        room: body.room,
+        room: body.room || null,
       })
       .select()
       .single();
