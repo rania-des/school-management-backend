@@ -55,7 +55,8 @@ async function getRoleData(profileId: string, role: string): Promise<any> {
         )
       `)
       .eq('profile_id', profileId)
-      .single();
+      .maybeSingle();
+    console.log('getRoleData student:', profileId, '| data:', JSON.stringify(data), '| error:', error?.message);
     return data;
   } else if (role === 'teacher') {
     const { data } = await supabaseAdmin
