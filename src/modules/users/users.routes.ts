@@ -48,7 +48,7 @@ async function getRoleData(profileId: string, role: string): Promise<any> {
           id, is_primary, relationship,
           parents(
             id, profile_id,
-            profiles(first_name, last_name, email, phone)
+            profiles(first_name, last_name, phone)
           )
         )
       `)
