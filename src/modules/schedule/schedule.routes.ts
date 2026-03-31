@@ -118,14 +118,25 @@ router.post('/', authorize('admin'), async (req: Request, res: Response, next: N
   try {
     const body = slotSchema.parse(req.body);
 
-    // Check for conflicts
+    // ✅ Résoudre teachers.id depuis profile_id si nécessaire
+    let finalTeacherId = body.teacherId;
+    const { data: teacherDirect } = await supabaseAdmin
+      .from('teachers').select('id').eq('id', body.teacherId).maybeSingle();
+    if (!teacherDirect) {
+      const { data: teacherByProfile } = await supabaseAdmin
+        .from('teachers').select('id').eq('profile_id', body.teacherId).maybeSingle();
+      if (teacherByProfile) finalTeacherId = teacherByProfile.id;
+    }
+
+    // ✅ Conflict check corrigé — chevauchement réel
     const { data: existing } = await supabaseAdmin
       .from('schedule_slots')
       .select('id')
       .eq('class_id', body.classId)
       .eq('day_of_week', body.dayOfWeek)
       .eq('is_active', true)
-      .or(`start_time.lte.${body.endTime},end_time.gte.${body.startTime}`);
+      .lt('start_time', body.endTime)
+      .gt('end_time', body.startTime);
 
     if (existing && existing.length > 0) {
       throw new AppError('Schedule conflict detected for this class', 409);
@@ -136,7 +147,7 @@ router.post('/', authorize('admin'), async (req: Request, res: Response, next: N
       .insert({
         class_id: body.classId,
         subject_id: body.subjectId,
-        teacher_id: body.teacherId,
+        teacher_id: finalTeacherId,
         academic_year_id: body.academicYearId,
         day_of_week: body.dayOfWeek,
         start_time: body.startTime,
@@ -146,29 +157,8 @@ router.post('/', authorize('admin'), async (req: Request, res: Response, next: N
       .select()
       .single();
 
-    if (error) throw new AppError('Failed to create schedule slot', 500);
+    if (error) throw new AppError(`Failed to create schedule slot: ${error.message}`, 500);
     return res.status(201).json(successResponse(data));
-  } catch (err) {
-    return next(err);
-  }
-});
-
-// PATCH /schedule/:id
-router.patch('/:id', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const updates = slotSchema.partial().parse(req.body);
-    const mapped: Record<string, unknown> = {};
-    if (updates.dayOfWeek) mapped.day_of_week = updates.dayOfWeek;
-    if (updates.startTime) mapped.start_time = updates.startTime;
-    if (updates.endTime) mapped.end_time = updates.endTime;
-    if (updates.room !== undefined) mapped.room = updates.room;
-    if (updates.teacherId) mapped.teacher_id = updates.teacherId;
-    if (updates.subjectId) mapped.subject_id = updates.subjectId;
-
-    const { data, error } = await supabaseAdmin
-      .from('schedule_slots').update(mapped).eq('id', req.params.id).select().single();
-    if (error || !data) throw new AppError('Slot not found', 404);
-    return res.json(successResponse(data));
   } catch (err) {
     return next(err);
   }
