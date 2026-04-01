@@ -95,8 +95,7 @@ router.post('/', authorize('teacher', 'admin'), async (req: Request, res: Respon
       .select()
       .single();
 
-    if (error || !data) throw new AppError('Failed to create announcement', 500);
-
+    if (error || !data) throw new AppError(`Failed to create announcement: ${error?.message}`, 500);
     // Notify relevant students
     if (body.classId) {
       const profileIds = await getClassStudentProfileIds(body.classId);
