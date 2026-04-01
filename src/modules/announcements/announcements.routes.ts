@@ -56,24 +56,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
       } else {
         query = query.is('class_id', null);
       }
-    } else if (role === 'teacher') {
-      // ✅ Les profs voient les annonces globales ET celles de leurs classes
-      const { data: teacher } = await supabaseAdmin
-        .from('teachers').select('id').eq('profile_id', req.user!.id).maybeSingle();
-      if (teacher?.id) {
-        const { data: assignments } = await supabaseAdmin
-          .from('teacher_assignments').select('class_id').eq('teacher_id', teacher.id);
-        const classIds = (assignments || []).map((a: any) => a.class_id).filter(Boolean);
-        if (classIds.length > 0) {
-          query = query.or(`class_id.is.null,class_id.in.(${classIds.join(',')})`);
-        } else {
-          // Pas de classes assignées → voit seulement les annonces globales
-          query = query.is('class_id', null);
-        }
-      } else {
-        query = query.is('class_id', null);
-      }
-    }
+    } 
     // admin voit tout — pas de filtre supplémentaire
 
     if (classId === 'null') {
