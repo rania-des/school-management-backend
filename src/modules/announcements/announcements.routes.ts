@@ -23,48 +23,70 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { page, limit, offset } = getPagination(req);
     const { classId, pinned } = req.query;
+    const now = new Date().toISOString();
+    const role = req.user!.role;
 
     let query = supabaseAdmin
       .from('announcements')
-      .select(`
-        *,
-        profiles(first_name, last_name, role),
-        classes(name)
-      `, { count: 'exact' })
+      .select(`*, profiles(first_name, last_name, role), classes(name)`, { count: 'exact' })
       .order('is_pinned', { ascending: false })
       .order('published_at', { ascending: false })
       .range(offset, offset + limit - 1);
 
-    // Filter expired
-    query = query.or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`);
+    // ✅ Filtre expiration — utilise deux filtres séparés au lieu de .or()
+    query = query.or(`expires_at.is.null,expires_at.gt.${now}`);
 
-    // Scope by role
-    if (req.user!.role === 'student') {
+    // ✅ Filtre par rôle
+    if (role === 'student') {
       const { data: student } = await supabaseAdmin
-        .from('students').select('class_id').eq('profile_id', req.user!.id).single();
+        .from('students').select('class_id').eq('profile_id', req.user!.id).maybeSingle();
       if (student?.class_id) {
         query = query.or(`class_id.is.null,class_id.eq.${student.class_id}`);
+      } else {
+        query = query.is('class_id', null);
       }
-    } else if (req.user!.role === 'parent') {
+    } else if (role === 'parent') {
       const { data: parent } = await supabaseAdmin
-        .from('parents').select('id').eq('profile_id', req.user!.id).single();
+        .from('parents').select('id').eq('profile_id', req.user!.id).maybeSingle();
       const { data: children } = await supabaseAdmin
-        .from('parent_student').select('students(class_id)').eq('parent_id', parent?.id);
+        .from('parent_student').select('students(class_id)').eq('parent_id', parent?.id || '');
       const classIds = (children || []).map((c: any) => c.students?.class_id).filter(Boolean);
       if (classIds.length > 0) {
         query = query.or(`class_id.is.null,class_id.in.(${classIds.join(',')})`);
+      } else {
+        query = query.is('class_id', null);
+      }
+    } else if (role === 'teacher') {
+      // ✅ Les profs voient les annonces globales ET celles de leurs classes
+      const { data: teacher } = await supabaseAdmin
+        .from('teachers').select('id').eq('profile_id', req.user!.id).maybeSingle();
+      if (teacher?.id) {
+        const { data: assignments } = await supabaseAdmin
+          .from('teacher_assignments').select('class_id').eq('teacher_id', teacher.id);
+        const classIds = (assignments || []).map((a: any) => a.class_id).filter(Boolean);
+        if (classIds.length > 0) {
+          query = query.or(`class_id.is.null,class_id.in.(${classIds.join(',')})`);
+        } else {
+          // Pas de classes assignées → voit seulement les annonces globales
+          query = query.is('class_id', null);
+        }
+      } else {
+        query = query.is('class_id', null);
       }
     }
+    // admin voit tout — pas de filtre supplémentaire
 
     if (classId === 'null') {
       query = query.is('class_id', null);
     } else if (classId) {
-      query = query.eq('class_id', classId);
+      query = query.eq('class_id', classId as string);
     }
+
     if (pinned === 'true') query = query.eq('is_pinned', true);
 
     const { data, count, error } = await query;
-    if (error) throw new AppError('Failed to fetch announcements', 500);
+    console.log('announcements:', { role, count, error: error?.message });
+    if (error) throw new AppError(`Failed to fetch announcements: ${error.message}`, 500);
 
     return res.json(paginate(data || [], count || 0, { page, limit, offset }));
   } catch (err) {
@@ -72,12 +94,11 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   }
 });
 
-// POST /announcements - teacher (for class) or admin (school-wide)
+// POST /announcements
 router.post('/', authorize('teacher', 'admin'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = announcementSchema.parse(req.body);
 
-    // Teachers can only post to their own classes
     if (req.user!.role === 'teacher' && !body.classId) {
       throw new AppError('Teachers must specify a classId', 400);
     }
@@ -90,13 +111,14 @@ router.post('/', authorize('teacher', 'admin'), async (req: Request, res: Respon
         title: body.title,
         content: body.content,
         is_pinned: body.isPinned,
-        expires_at: body.expiresAt,
+        expires_at: body.expiresAt || null,
+        published_at: new Date().toISOString(),
       })
       .select()
       .single();
 
     if (error || !data) throw new AppError(`Failed to create announcement: ${error?.message}`, 500);
-    // Notify relevant students
+
     if (body.classId) {
       const profileIds = await getClassStudentProfileIds(body.classId);
       await createBulkNotifications(profileIds, {
