@@ -20,6 +20,7 @@
     "helmet": "^7.1.0",
     "morgan": "^1.10.0",
     "multer": "^1.4.5-lts.1",
+    "nodemailer": "^8.0.5",
     "resend": "^2.0.0",
     "uuid": "^9.0.0",
     "zod": "^3.22.4"
@@ -30,6 +31,7 @@
     "@types/morgan": "^1.9.9",
     "@types/multer": "^1.4.11",
     "@types/node": "^20.10.0",
+    "@types/nodemailer": "^8.0.0",
     "@types/uuid": "^9.0.7",
     "@typescript-eslint/eslint-plugin": "^7.6.0",
     "@typescript-eslint/parser": "^7.6.0",
