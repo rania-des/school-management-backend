@@ -35,6 +35,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
 
     // ✅ Filtre expiration — utilise deux filtres séparés au lieu de .or()
     query = query.or(`expires_at.is.null,expires_at.gt.${now}`);
+    
 
     // ✅ Filtre par rôle
     if (role === 'student') {

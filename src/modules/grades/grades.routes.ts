@@ -212,8 +212,7 @@ router.get('/bulletin/pdf', async (req: Request, res: Response, next: NextFuncti
       trimester_1: '1er Trimestre', trimester_2: '2ème Trimestre', trimester_3: '3ème Trimestre',
       semester_1: '1er Semestre', semester_2: '2ème Semestre', annual: 'Annuel',
     };
-    const periodLabel = periodLabels[period as string] || period;
-
+    const periodLabel = periodLabels[period as string] || (period as string);
     // ── Generate PDF ──
     const doc = new PDFDocument({ size: 'A4', margin: 40, bufferPages: true });
     const chunks: Buffer[] = [];
