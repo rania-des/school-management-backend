@@ -163,8 +163,8 @@ router.get('/bulletin/pdf', async (req: Request, res: Response, next: NextFuncti
 
     // Fetch student info
     const { data: student } = await supabaseAdmin.from('students')
-      .select('*, profiles(first_name, last_name, date_of_birth, email), classes(name, levels(name))')
-      .eq('id', studentId as string).single();
+    .select('*, profiles(first_name, last_name, date_of_birth, email), classes(name)')
+    .eq('id', studentId as string).single();
     if (!student) throw new AppError('Student not found', 404);
 
     // Fetch grades
