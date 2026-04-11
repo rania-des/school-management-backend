@@ -1,3 +1,7 @@
+console.log('🚀 === SERVER STARTING WITH DEBUG === 🚀');
+console.log('🔵 Node version:', process.version);
+console.log('🔵 Environment:', process.env.NODE_ENV);
+
 import app from './app';
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
