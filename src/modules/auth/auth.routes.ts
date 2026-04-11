@@ -12,8 +12,8 @@ router.post('/refresh',         authController.refresh.bind(authController));
 router.post('/forgot-password', authController.forgotPassword.bind(authController));
 router.post('/reset-password',  authController.resetPasswordWithToken.bind(authController));
 
-// ── Route temporaire pour fixer les mots de passe manquants ───────────────────
-// À SUPPRIMER après exécution - permet de créer des hash pour tous les utilisateurs existants
+// ── Route TEMPORAIRE pour fixer les mots de passe (sans authentification) ────
+// À SUPPRIMER APRÈS EXÉCUTION
 router.post('/fix-passwords', async (req, res, next) => {
   try {
     const defaultPassword = req.body.password || 'Amer1234';
