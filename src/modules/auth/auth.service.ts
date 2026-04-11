@@ -1,3 +1,5 @@
+console.log('🔥🔥🔥 AUTH SERVICE CHARGÉ AVEC LA NOUVELLE VERSION 🔥🔥🔥');
+
 import { supabaseAdmin, supabasePublic } from '../../config/supabase';
 import { AppError } from '../../middleware/error.middleware';
 import { sendWelcomeEmail } from '../../utils/email';
@@ -9,6 +11,7 @@ export class AuthService {
     console.log('🔵 === LOGIN ATTEMPT ===');
     console.log('🔵 Email:', email);
     console.log('🔵 Password length:', password?.length);
+    console.log('🔵 Using supabasePublic for login');
 
     const { data, error } = await supabasePublic.auth.signInWithPassword({
       email: email.trim(),
@@ -17,19 +20,23 @@ export class AuthService {
 
     console.log('🔵 Error from Supabase:', error?.message || 'No error');
     console.log('🔵 Session exists:', !!data.session);
+    console.log('🔵 User exists:', !!data.user);
 
     if (error || !data.session) {
       console.log('🔴 Login failed:', error?.message);
       throw new AppError('Email ou mot de passe incorrect', 401);
     }
 
-    console.log('🔵 User ID:', data.user.id);
+    console.log('🔵 Login successful! User ID:', data.user.id);
 
     const { data: profile, error: profileError } = await supabaseAdmin
       .from('profiles')
       .select('*')
       .eq('id', data.user.id)
       .single();
+
+    console.log('🔵 Profile found:', !!profile);
+    console.log('🔵 Profile error:', profileError?.message || 'No error');
 
     if (profileError || !profile) {
       throw new AppError('Profil introuvable', 404);
@@ -72,6 +79,7 @@ export class AuthService {
       .maybeSingle();
 
     if (existingProfile) {
+      console.log('🔴 Email already exists in profiles');
       throw new AppError('Cette adresse email est déjà utilisée', 409);
     }
 
@@ -82,14 +90,18 @@ export class AuthService {
       user_metadata: { first_name: payload.firstName, last_name: payload.lastName },
     });
 
+    console.log('🔵 Auth user created:', !!data.user);
+    console.log('🔵 Auth error:', error?.message || 'No error');
+
     if (error || !data.user) {
-      if (error?.message.includes('already')) {
+      if (error?.message.includes('already') || error?.message.includes('registered')) {
         throw new AppError('Cette adresse email est déjà utilisée', 409);
       }
       throw new AppError('Échec de la création du compte', 400);
     }
 
     const userId = data.user.id;
+    console.log('🔵 User ID:', userId);
 
     const { error: profileError } = await supabaseAdmin.from('profiles').insert({
       id: userId,
@@ -103,9 +115,12 @@ export class AuthService {
     });
 
     if (profileError) {
+      console.log('🔴 Profile creation error:', profileError.message);
       await supabaseAdmin.auth.admin.deleteUser(userId);
       throw new AppError(`Échec de la création du profil: ${profileError.message}`, 500);
     }
+
+    console.log('✅ Profile created successfully');
 
     await this.createRoleRecord(userId, payload.role);
     const roleId = await this.getRoleId(userId, payload.role);
@@ -121,6 +136,7 @@ export class AuthService {
     
     const { data, error } = await supabasePublic.auth.refreshSession({ refresh_token: refreshToken });
     if (error || !data.session) {
+      console.log('🔴 Refresh failed:', error?.message);
       throw new AppError('Token de rafraîchissement invalide', 401);
     }
     return {
@@ -146,6 +162,7 @@ export class AuthService {
       redirectTo: redirectUrl,
     });
     if (error) {
+      console.log('🔴 Forgot password error:', error.message);
       throw new AppError("Échec de l'envoi de l'email de réinitialisation", 500);
     }
     return { message: 'Email de réinitialisation envoyé' };
@@ -157,14 +174,18 @@ export class AuthService {
     
     const { data, error } = await supabasePublic.auth.getUser(token);
     if (error || !data.user) {
+      console.log('🔴 Invalid token:', error?.message);
       throw new AppError('Token invalide ou expiré', 401);
     }
+
+    console.log('🔵 User found:', data.user.id);
 
     const { error: updateError } = await supabaseAdmin.auth.admin.updateUserById(data.user.id, {
       password: newPassword,
     });
 
     if (updateError) {
+      console.log('🔴 Update password error:', updateError.message);
       throw new AppError('Échec de la réinitialisation du mot de passe', 500);
     }
 
@@ -179,6 +200,7 @@ export class AuthService {
       password: newPassword,
     });
     if (error) {
+      console.log('🔴 Update password error:', error.message);
       throw new AppError('Échec de la mise à jour du mot de passe', 500);
     }
     return { message: 'Mot de passe mis à jour avec succès' };
@@ -195,6 +217,7 @@ export class AuthService {
       .single();
 
     if (error || !profile) {
+      console.log('🔴 Profile not found:', error?.message);
       throw new AppError('Profil non trouvé', 404);
     }
 
@@ -245,20 +268,28 @@ export class AuthService {
 
   // ── Private helpers ────────────────────────────────────────────────────────
   private async createRoleRecord(profileId: string, role: string): Promise<void> {
+    console.log(`🔵 Creating ${role} record for profile:`, profileId);
+    
     if (role === 'student') {
-      await supabaseAdmin.from('students').insert({
+      const { error } = await supabaseAdmin.from('students').insert({
         profile_id: profileId,
         student_number: `STU-${Date.now()}`,
         enrollment_date: new Date().toISOString().split('T')[0],
       });
+      if (error) console.error('❌ Error creating student record:', error.message);
+      else console.log('✅ Student record created for', profileId);
     } else if (role === 'teacher') {
-      await supabaseAdmin.from('teachers').insert({
+      const { error } = await supabaseAdmin.from('teachers').insert({
         profile_id: profileId,
         employee_number: `TCH-${Date.now()}`,
         hire_date: new Date().toISOString().split('T')[0],
       });
+      if (error) console.error('❌ Error creating teacher record:', error.message);
+      else console.log('✅ Teacher record created for', profileId);
     } else if (role === 'parent') {
-      await supabaseAdmin.from('parents').insert({ profile_id: profileId });
+      const { error } = await supabaseAdmin.from('parents').insert({ profile_id: profileId });
+      if (error) console.error('❌ Error creating parent record:', error.message);
+      else console.log('✅ Parent record created for', profileId);
     }
   }
 
