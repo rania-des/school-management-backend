@@ -1,4 +1,4 @@
-console.log('🔥🔥🔥 AUTH SERVICE V3 🔥🔥🔥');
+console.log('🔥🔥🔥 AUTH SERVICE V4 🔥🔥🔥');
 
 import { createClient } from '@supabase/supabase-js';
 import { AppError } from '../../middleware/error.middleware';
@@ -11,10 +11,41 @@ const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 console.log('🔑 AUTH SERVICE - ANON:', SUPABASE_ANON_KEY ? '✅ ' + SUPABASE_ANON_KEY.substring(0, 15) + '...' : '❌');
 console.log('🔑 AUTH SERVICE - SERVICE:', SUPABASE_SERVICE_KEY ? '✅ ' + SUPABASE_SERVICE_KEY.substring(0, 15) + '...' : '❌');
 
+// Public client for auth (login, signup)
 const supabasePublic = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// Admin client for admin operations (createUser, deleteUser, etc.)
 const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
   auth: { autoRefreshToken: false, persistSession: false },
 });
+
+/**
+ * Fetch profile using the user's own access token.
+ * This bypasses any service_role key compatibility issues with new Supabase projects.
+ */
+async function fetchProfileWithUserToken(userId: string, accessToken: string) {
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/profiles?id=eq.${userId}&select=*`,
+    {
+      headers: {
+        'apikey': SUPABASE_ANON_KEY,          // anon key is always the JWT legacy key
+        'Authorization': `Bearer ${accessToken}`, // user's own JWT — always works
+        'Content-Type': 'application/json',
+      },
+    }
+  );
+
+  console.log('🔵 Profile fetch status:', res.status);
+  const data = await res.json();
+  console.log('🔵 Profiles:', JSON.stringify(data));
+
+  if (!res.ok) {
+    console.log('🔴 Profile fetch error:', JSON.stringify(data));
+    return null;
+  }
+
+  return Array.isArray(data) ? data[0] ?? null : null;
+}
 
 export class AuthService {
 
@@ -35,25 +66,11 @@ export class AuthService {
     }
 
     const userId = data.user.id;
+    const accessToken = data.session.access_token;
     console.log('🔵 User ID:', userId);
 
-    // Utiliser REST API directement pour bypasser les problèmes de clés
-    const profileRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/profiles?id=eq.${userId}&select=*`,
-      {
-        headers: {
-          'apikey': SUPABASE_SERVICE_KEY,
-          'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
-          'Content-Type': 'application/json',
-        },
-      }
-    );
-
-    const profiles = await profileRes.json();
-    console.log('🔵 Profile fetch status:', profileRes.status);
-    console.log('🔵 Profiles:', JSON.stringify(profiles));
-
-    const profile = Array.isArray(profiles) ? profiles[0] : null;
+    // Use user's own token — bypasses service_role key issues entirely
+    const profile = await fetchProfileWithUserToken(userId, accessToken);
 
     if (!profile) {
       console.log('🔴 No profile found for user:', userId);
@@ -63,7 +80,7 @@ export class AuthService {
     console.log('✅ Login successful! Role:', profile.role);
 
     return {
-      accessToken: data.session.access_token,
+      accessToken,
       refreshToken: data.session.refresh_token,
       expiresIn: data.session.expires_in,
       user: {
@@ -164,18 +181,8 @@ export class AuthService {
     return { message: 'Mot de passe mis à jour avec succès' };
   }
 
-  async getMe(userId: string) {
-    const profileRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/profiles?id=eq.${userId}&select=*`,
-      {
-        headers: {
-          'apikey': SUPABASE_SERVICE_KEY,
-          'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
-        },
-      }
-    );
-    const profiles = await profileRes.json();
-    const profile = Array.isArray(profiles) ? profiles[0] : null;
+  async getMe(userId: string, accessToken: string) {
+    const profile = await fetchProfileWithUserToken(userId, accessToken);
     if (!profile) throw new AppError('Profil non trouvé', 404);
 
     let roleData = null;
