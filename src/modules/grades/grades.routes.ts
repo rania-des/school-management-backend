@@ -6,7 +6,9 @@ import { authenticate, authorize } from '../../middleware/auth.middleware';
 import { AppError } from '../../middleware/error.middleware';
 import { successResponse, getPagination, paginate } from '../../utils/pagination';
 import { createNotification, createBulkNotifications, getStudentParentProfileIds } from '../../utils/notifications';
-import PDFDocument from 'pdfkit';
+
+// Utilisation de require pour pdfkit (évite les problèmes de types)
+const PDFDocument = require('pdfkit');
 
 const router = Router();
 router.use(authenticate);
@@ -141,9 +143,7 @@ router.get('/bulletin', async (req: Request, res: Response, next: NextFunction) 
   } catch (err) { return next(err); }
 });
 
-// ═══════════════════════════════════════════════════
 // GET /grades/bulletin/pdf — Generate PDF bulletin
-// ═══════════════════════════════════════════════════
 router.get('/bulletin/pdf', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { studentId, period } = req.query;
@@ -163,8 +163,8 @@ router.get('/bulletin/pdf', async (req: Request, res: Response, next: NextFuncti
 
     // Fetch student info
     const { data: student } = await supabaseAdmin.from('students')
-    .select('*, users(first_name, last_name, date_of_birth, email), classes(name)')
-    .eq('id', studentId as string).single();
+      .select('*, users(first_name, last_name, date_of_birth, email), classes(name)')
+      .eq('id', studentId as string).single();
     if (!student) throw new AppError('Student not found', 404);
 
     // Fetch grades
@@ -213,7 +213,7 @@ router.get('/bulletin/pdf', async (req: Request, res: Response, next: NextFuncti
       semester_1: '1er Semestre', semester_2: '2ème Semestre', annual: 'Annuel',
     };
     const periodLabel = periodLabels[period as string] || (period as string);
-    
+
     // ── Generate PDF ──
     const doc = new PDFDocument({ size: 'A4', margin: 40, bufferPages: true });
     const chunks: Buffer[] = [];
@@ -321,8 +321,8 @@ router.get('/bulletin/pdf', async (req: Request, res: Response, next: NextFuncti
     doc.roundedRect(40, currentY, pageW, 40, 6).fill(blue);
     doc.fillColor('white').fontSize(13).font('Helvetica-Bold');
     doc.text('MOYENNE GÉNÉRALE', 60, currentY + 12);
-    const avgColor = generalAvg >= 14 ? '#4ADE80' : generalAvg >= 10 ? '#FCD34D' : '#F87171';
-    doc.fillColor(avgColor).fontSize(16);
+    const avgColorGeneral = generalAvg >= 14 ? '#4ADE80' : generalAvg >= 10 ? '#FCD34D' : '#F87171';
+    doc.fillColor(avgColorGeneral).fontSize(16);
     doc.text(generalAvg.toFixed(2) + ' / 20', 380, currentY + 10, { align: 'right', width: 130 });
 
     // ── General comments ──
