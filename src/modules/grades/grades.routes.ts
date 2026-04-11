@@ -33,7 +33,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
 
     let query = supabaseAdmin
       .from('grades')
-      .select(`*, subjects(name, code, coefficient), students(student_number, profiles(first_name, last_name)), teachers(profiles(first_name, last_name)), classes(name)`, { count: 'exact' })
+      .select(`*, subjects(name, code, coefficient), students(student_number, users(first_name, last_name)), teachers(users(first_name, last_name)), classes(name)`, { count: 'exact' })
       .order('grade_date', { ascending: false })
       .range(offset, offset + limit - 1);
 
@@ -86,7 +86,7 @@ router.post('/', authorize('teacher', 'admin'), async (req: Request, res: Respon
       coefficient: body.coefficient, title: body.title,
       description: body.description,
       grade_date: body.gradeDate || new Date().toISOString().split('T')[0],
-    }).select('*, subjects(name), students(profile_id, profiles(first_name, last_name))').single();
+    }).select('*, subjects(name), students(profile_id, users(first_name, last_name))').single();
 
     if (error || !data) throw new AppError('Failed to create grade', 500);
 
@@ -95,7 +95,7 @@ router.post('/', authorize('teacher', 'admin'), async (req: Request, res: Respon
       await createNotification({ recipientId: studentProfileId, type: 'grade', title: 'Nouvelle note', body: `Vous avez reçu ${body.score}/20 en ${(data as any).subjects?.name} - ${body.title}`, data: { gradeId: data.id, score: body.score } });
       const parentProfileIds = await getStudentParentProfileIds(body.studentId);
       for (const parentId of parentProfileIds) {
-        await createNotification({ recipientId: parentId, type: 'grade', title: 'Nouvelle note', body: `Note de ${(data as any).students?.profiles?.first_name}: ${body.score}/20 en ${(data as any).subjects?.name}`, data: { gradeId: data.id } });
+        await createNotification({ recipientId: parentId, type: 'grade', title: 'Nouvelle note', body: `Note de ${(data as any).students?.users?.first_name}: ${body.score}/20 en ${(data as any).subjects?.name}`, data: { gradeId: data.id } });
       }
     }
     return res.status(201).json(successResponse(data, 'Grade created'));
@@ -114,7 +114,7 @@ router.get('/bulletin', async (req: Request, res: Response, next: NextFunction) 
     }
 
     const { data: grades, error } = await supabaseAdmin.from('grades')
-      .select('*, subjects(name, code, coefficient), teachers(profiles(first_name, last_name))')
+      .select('*, subjects(name, code, coefficient), teachers(users(first_name, last_name))')
       .eq('student_id', studentId as string).eq('period', period as string)
       .eq('academic_year_id', academicYearId as string).order('subjects(name)', { ascending: true });
 
@@ -129,7 +129,7 @@ router.get('/bulletin', async (req: Request, res: Response, next: NextFunction) 
     const generalAverage = totalWeight > 0 ? (totalWeightedScore / totalWeight).toFixed(2) : null;
 
     const { data: comments } = await supabaseAdmin.from('teacher_comments')
-      .select('*, subjects(name), teachers(profiles(first_name, last_name))')
+      .select('*, subjects(name), teachers(users(first_name, last_name))')
       .eq('student_id', studentId as string).eq('period', period as string)
       .eq('academic_year_id', academicYearId as string);
 
@@ -163,7 +163,7 @@ router.get('/bulletin/pdf', async (req: Request, res: Response, next: NextFuncti
 
     // Fetch student info
     const { data: student } = await supabaseAdmin.from('students')
-    .select('*, profiles(first_name, last_name, date_of_birth, email), classes(name)')
+    .select('*, users(first_name, last_name, date_of_birth, email), classes(name)')
     .eq('id', studentId as string).single();
     if (!student) throw new AppError('Student not found', 404);
 
@@ -204,7 +204,7 @@ router.get('/bulletin/pdf', async (req: Request, res: Response, next: NextFuncti
 
     // Fetch comments
     const { data: comments } = await supabaseAdmin.from('teacher_comments')
-      .select('*, subjects(name), teachers(profiles(first_name, last_name))')
+      .select('*, subjects(name), teachers(users(first_name, last_name))')
       .eq('student_id', studentId as string).eq('period', period as string);
 
     // Period label
@@ -213,6 +213,7 @@ router.get('/bulletin/pdf', async (req: Request, res: Response, next: NextFuncti
       semester_1: '1er Semestre', semester_2: '2ème Semestre', annual: 'Annuel',
     };
     const periodLabel = periodLabels[period as string] || (period as string);
+    
     // ── Generate PDF ──
     const doc = new PDFDocument({ size: 'A4', margin: 40, bufferPages: true });
     const chunks: Buffer[] = [];
@@ -238,13 +239,13 @@ router.get('/bulletin/pdf', async (req: Request, res: Response, next: NextFuncti
     const infoY = 120;
     doc.roundedRect(40, infoY, pageW, 70, 8).fill(lightGray);
     doc.fillColor(blue).fontSize(12);
-    doc.text(`Élève : ${(student as any).profiles?.first_name} ${(student as any).profiles?.last_name}`, 55, infoY + 12);
+    doc.text(`Élève : ${(student as any).users?.first_name} ${(student as any).users?.last_name}`, 55, infoY + 12);
     doc.fontSize(10).fillColor(gray);
     doc.text(`Classe : ${(student as any).classes?.name || '-'}`, 55, infoY + 32);
     doc.text(`N° : ${student.student_number || '-'}`, 55, infoY + 48);
 
-    const dateNaissance = (student as any).profiles?.date_of_birth
-      ? new Date((student as any).profiles.date_of_birth).toLocaleDateString('fr-FR')
+    const dateNaissance = (student as any).users?.date_of_birth
+      ? new Date((student as any).users.date_of_birth).toLocaleDateString('fr-FR')
       : '-';
     doc.text(`Né(e) le : ${dateNaissance}`, 300, infoY + 32);
     doc.text(`Période : ${periodLabel}`, 300, infoY + 48);
@@ -335,7 +336,7 @@ router.get('/bulletin/pdf', async (req: Request, res: Response, next: NextFuncti
       currentY += 20;
 
       for (const c of generalComments) {
-        const teacherName = c.teachers?.profiles ? `${c.teachers.profiles.first_name} ${c.teachers.profiles.last_name}` : 'Enseignant';
+        const teacherName = c.teachers?.users ? `${c.teachers.users.first_name} ${c.teachers.users.last_name}` : 'Enseignant';
         doc.roundedRect(40, currentY, pageW, 35, 4).fill(lightGray);
         doc.fillColor(blue).fontSize(8).font('Helvetica-Bold');
         doc.text(teacherName, 50, currentY + 6);
@@ -356,7 +357,7 @@ router.get('/bulletin/pdf', async (req: Request, res: Response, next: NextFuncti
     doc.end();
 
     const pdfBuffer = await pdfPromise;
-    const fileName = `bulletin_${(student as any).profiles?.last_name}_${periodLabel.replace(/ /g, '_')}.pdf`;
+    const fileName = `bulletin_${(student as any).users?.last_name}_${periodLabel.replace(/ /g, '_')}.pdf`;
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);

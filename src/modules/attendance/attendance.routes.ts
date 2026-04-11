@@ -4,9 +4,7 @@ import { z } from 'zod';
 import { supabaseAdmin } from '../../config/supabase';
 import { authenticate, authorize } from '../../middleware/auth.middleware';
 import { AppError } from '../../middleware/error.middleware';
-import { successResponse, getPagination, paginate } from '../../utils/pagination';
-import { createNotification, getStudentParentProfileIds } from '../../utils/notifications';
-import { sendAbsenceNotification } from '../../utils/email';
+import { successResponse } from '../../utils/pagination';
 
 const router = Router();
 router.use(authenticate);
@@ -16,217 +14,252 @@ const attendanceSchema = z.object({
   classId: z.string().uuid(),
   scheduleSlotId: z.string().uuid().optional(),
   date: z.string(),
-  status: z.enum(['present', 'absent', 'late', 'excused']),
+  status: z.enum(['present', 'absent', 'late']),
   reason: z.string().optional(),
 });
 
-// GET /attendance
-router.get('/', async (req: Request, res: Response, next: NextFunction) => {
+// ============================================
+// ROUTES POUR ENSEIGNANTS
+// ============================================
+
+// GET /attendance/teacher/classes - Récupérer les classes de l'enseignant
+router.get('/teacher/classes', authorize('teacher', 'admin'), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { page, limit, offset } = getPagination(req);
-    const { studentId, classId, startDate, endDate, status } = req.query;
+    const { data: teacher } = await supabaseAdmin
+      .from('teachers')
+      .select('id')
+      .eq('profile_id', req.user!.id)
+      .single();
 
-    let query = supabaseAdmin
-      .from('attendance')
-      .select(`
-        *,
-        students(student_number, profiles(first_name, last_name, avatar_url)),
-        classes(name),
-        schedule_slots(subjects(name), start_time, end_time)
-      `, { count: 'exact' })
-      .order('date', { ascending: false })
-      .range(offset, offset + limit - 1);
+    if (!teacher) throw new AppError('Teacher not found', 404);
 
-    if (req.user!.role === 'student') {
-      const { data: student } = await supabaseAdmin
-        .from('students').select('id').eq('profile_id', req.user!.id).single();
-      query = query.eq('student_id', student?.id);
-    } else if (req.user!.role === 'parent') {
-      const { data: parent } = await supabaseAdmin
-        .from('parents').select('id').eq('profile_id', req.user!.id).single();
-      const { data: children } = await supabaseAdmin
-        .from('parent_student').select('student_id').eq('parent_id', parent?.id);
-      const childIds = (children || []).map((c: any) => c.student_id);
-      if (childIds.length > 0) query = query.in('student_id', childIds);
+    const { data: slots, error } = await supabaseAdmin
+      .from('schedule_slots')
+      .select('*, classes(id, name), subjects(id, name)')
+      .eq('teacher_id', teacher.id)
+      .eq('is_active', true);
+
+    if (error) throw new AppError('Failed to fetch teacher classes', 500);
+
+    const classMap = new Map();
+    for (const slot of slots || []) {
+      const key = `${slot.class_id}_${slot.subject_id}`;
+      if (!classMap.has(key)) {
+        classMap.set(key, {
+          classId: slot.class_id,
+          className: slot.classes?.name || `Classe ${slot.class_id}`,
+          subjectId: slot.subject_id,
+          subjectName: slot.subjects?.name || 'Matière',
+          slots: [],
+        });
+      }
+      classMap.get(key).slots.push({
+        day: slot.day_of_week,
+        start: slot.start_time,
+        end: slot.end_time,
+        room: slot.room,
+      });
     }
 
-    if (studentId) query = query.eq('student_id', studentId);
+    return res.json(successResponse(Array.from(classMap.values())));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// GET /attendance/students/:classId - Récupérer les élèves d'une classe
+router.get('/students/:classId', authorize('teacher', 'admin'), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { classId } = req.params;
+
+    const { data: students, error } = await supabaseAdmin
+      .from('students')
+      .select(`
+        id,
+        profile_id,
+        student_number,
+        users:profile_id(first_name, last_name, email)
+      `)
+      .eq('class_id', classId);
+
+    if (error) throw new AppError('Failed to fetch students', 500);
+
+    return res.json(successResponse(students || []));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// ============================================
+// ROUTES GÉNÉRALES
+// ============================================
+
+// GET /attendance - Liste des présences avec filtres
+router.get('/', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { classId, studentId, date, startDate, endDate, limit = 100 } = req.query;
+    
+    let query = supabaseAdmin
+      .from('attendance')
+      .select('*, students(*, users(first_name, last_name)), classes(*), teachers(*)')
+      .order('date', { ascending: false })
+      .limit(Number(limit));
+
     if (classId) query = query.eq('class_id', classId);
-    if (status) query = query.eq('status', status);
+    if (studentId) query = query.eq('student_id', studentId);
+    if (date) query = query.eq('date', date);
     if (startDate) query = query.gte('date', startDate);
     if (endDate) query = query.lte('date', endDate);
 
-    const { data, count, error } = await query;
-    if (error) throw new AppError('Failed to fetch attendance', 500);
-
-    return res.json(paginate(data || [], count || 0, { page, limit, offset }));
-  } catch (err) {
-    return next(err);
-  }
-});
-
-// GET /attendance/stats - summary for student
-router.get('/stats', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    let studentId = req.query.studentId as string;
-
+    // Filtrer par rôle
     if (req.user!.role === 'student') {
       const { data: student } = await supabaseAdmin
-        .from('students').select('id').eq('profile_id', req.user!.id).single();
-      studentId = student?.id;
-    }
-
-    if (!studentId) throw new AppError('studentId required', 400);
-
-    const { data, error } = await supabaseAdmin
-      .from('attendance')
-      .select('status')
-      .eq('student_id', studentId);
-
-    if (error) throw new AppError('Failed to fetch stats', 500);
-
-    const stats = (data || []).reduce((acc: Record<string, number>, row: any) => {
-      acc[row.status] = (acc[row.status] || 0) + 1;
-      return acc;
-    }, {});
-
-    const total = (data || []).length;
-    const absenceRate = total > 0 ? (((stats.absent || 0) + (stats.late || 0)) / total * 100).toFixed(1) : '0.0';
-
-    return res.json(successResponse({ stats, total, absenceRate }));
-  } catch (err) {
-    return next(err);
-  }
-});
-
-// POST /attendance - teacher marks attendance
-router.post('/', authorize('teacher', 'admin'), async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const body = attendanceSchema.parse(req.body);
-
-    let teacherId: string | undefined;
-    if (req.user!.role === 'teacher') {
-      const { data: teacher } = await supabaseAdmin
-        .from('teachers').select('id').eq('profile_id', req.user!.id).single();
-      teacherId = teacher?.id;
-    }
-
-    const { data, error } = await supabaseAdmin
-      .from('attendance')
-      .upsert({
-        student_id: body.studentId,
-        class_id: body.classId,
-        schedule_slot_id: body.scheduleSlotId,
-        teacher_id: teacherId,
-        date: body.date,
-        status: body.status,
-        reason: body.reason,
-      }, { onConflict: 'student_id,date,schedule_slot_id' })
-      .select('*, students(profile_id, profiles(first_name, last_name, email))')
-      .single();
-
-    if (error) throw new AppError('Failed to record attendance', 500);
-
-    // If absent or late, notify student and parents
-    if (body.status === 'absent' || body.status === 'late') {
-      const studentData = (data as any).students;
-      const studentProfileId = studentData?.profile_id;
-
-      if (studentProfileId) {
-        await createNotification({
-          recipientId: studentProfileId,
-          type: 'absence',
-          title: body.status === 'absent' ? 'Absence enregistrée' : 'Retard enregistré',
-          body: `Vous avez été marqué(e) ${body.status === 'absent' ? 'absent(e)' : 'en retard'} le ${body.date}`,
-          data: { attendanceId: data.id },
-        });
-
-        // Notify parents
-        const parentProfileIds = await getStudentParentProfileIds(body.studentId);
-        const studentName = `${studentData?.profiles?.first_name} ${studentData?.profiles?.last_name}`;
-        for (const parentId of parentProfileIds) {
-          await createNotification({
-            recipientId: parentId,
-            type: 'absence',
-            title: `Absence de ${studentName}`,
-            body: `${studentName} a été marqué(e) ${body.status === 'absent' ? 'absent(e)' : 'en retard'} le ${body.date}`,
-            data: { attendanceId: data.id, studentId: body.studentId },
-          });
-        }
-
-        // Send email to parents
-        const { data: parentEmails } = await supabaseAdmin
+        .from('students')
+        .select('id')
+        .eq('profile_id', req.user!.id)
+        .single();
+      if (student) query = query.eq('student_id', student.id);
+    } else if (req.user!.role === 'parent') {
+      const { data: parent } = await supabaseAdmin
+        .from('parents')
+        .select('id')
+        .eq('profile_id', req.user!.id)
+        .single();
+      if (parent) {
+        const { data: children } = await supabaseAdmin
           .from('parent_student')
-          .select('parents(profiles(id))')
-          .eq('student_id', body.studentId);
-
-        // Email notification (fire and forget)
-        if (studentData?.profiles?.email) {
-          sendAbsenceNotification(
-            studentData.profiles.email,
-            studentData.profiles.first_name,
-            studentName,
-            body.date
-          ).catch(console.error);
-        }
+          .select('student_id')
+          .eq('parent_id', parent.id);
+        const childIds = (children || []).map((c: any) => c.student_id);
+        if (childIds.length > 0) query = query.in('student_id', childIds);
       }
     }
 
-    return res.status(201).json(successResponse(data));
+    const { data, error } = await query;
+    if (error) throw new AppError('Failed to fetch attendance', 500);
+
+    return res.json(successResponse(data || []));
   } catch (err) {
     return next(err);
   }
 });
 
-// POST /attendance/bulk - mark multiple students at once
+// POST /attendance/bulk - Enregistrement multiple des présences
 router.post('/bulk', authorize('teacher', 'admin'), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { records } = z.object({
-      records: z.array(attendanceSchema),
+    const { attendances } = z.object({
+      attendances: z.array(attendanceSchema),
     }).parse(req.body);
 
-    let teacherId: string | undefined;
-    if (req.user!.role === 'teacher') {
-      const { data: teacher } = await supabaseAdmin
-        .from('teachers').select('id').eq('profile_id', req.user!.id).single();
-      teacherId = teacher?.id;
-    }
+    const { data: teacher } = await supabaseAdmin
+      .from('teachers')
+      .select('id')
+      .eq('profile_id', req.user!.id)
+      .single();
 
-    const insertData = records.map((r) => ({
-      student_id: r.studentId,
-      class_id: r.classId,
-      schedule_slot_id: r.scheduleSlotId,
-      teacher_id: teacherId,
-      date: r.date,
-      status: r.status,
-      reason: r.reason,
+    const records = attendances.map((a) => ({
+      student_id: a.studentId,
+      class_id: a.classId,
+      schedule_slot_id: a.scheduleSlotId || null,
+      teacher_id: teacher?.id || null,
+      date: a.date,
+      status: a.status,
+      reason: a.reason || null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
     }));
 
     const { data, error } = await supabaseAdmin
       .from('attendance')
-      .upsert(insertData, { onConflict: 'student_id,date,schedule_slot_id' })
+      .upsert(records, { onConflict: 'student_id,class_id,date' })
       .select();
 
-    if (error) throw new AppError('Failed to record bulk attendance', 500);
-    return res.status(201).json(successResponse(data, `${records.length} records saved`));
+    if (error) throw new AppError(`Failed to save attendance: ${error.message}`, 500);
+
+    return res.status(201).json(successResponse(data, `${data?.length} attendance records saved`));
   } catch (err) {
     return next(err);
   }
 });
 
-// PATCH /attendance/:id
-router.patch('/:id', authorize('teacher', 'admin'), async (req: Request, res: Response, next: NextFunction) => {
+// GET /attendance/stats/:studentId - Statistiques d'absence pour un élève
+router.get('/stats/:studentId', authorize('teacher', 'admin', 'parent'), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const updates = z.object({
-      status: z.enum(['present', 'absent', 'late', 'excused']).optional(),
-      reason: z.string().optional(),
-    }).parse(req.body);
+    const { studentId } = req.params;
+    const { period } = req.query;
 
-    const { data, error } = await supabaseAdmin
-      .from('attendance').update(updates).eq('id', req.params.id).select().single();
+    let query = supabaseAdmin
+      .from('attendance')
+      .select('status, date')
+      .eq('student_id', studentId);
 
-    if (error || !data) throw new AppError('Record not found', 404);
-    return res.json(successResponse(data));
+    if (period) {
+      const startDate = new Date();
+      if (period === 'week') startDate.setDate(startDate.getDate() - 7);
+      else if (period === 'month') startDate.setMonth(startDate.getMonth() - 1);
+      else if (period === 'year') startDate.setFullYear(startDate.getFullYear() - 1);
+      query = query.gte('date', startDate.toISOString().split('T')[0]);
+    }
+
+    const { data, error } = await query;
+    if (error) throw new AppError('Failed to fetch attendance stats', 500);
+
+    const stats = {
+      present: (data || []).filter((a: any) => a.status === 'present').length,
+      absent: (data || []).filter((a: any) => a.status === 'absent').length,
+      late: (data || []).filter((a: any) => a.status === 'late').length,
+      total: (data || []).length,
+    };
+
+    return res.json(successResponse(stats));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// DELETE /attendance/:id - Supprimer une entrée de présence
+router.delete('/:id', authorize('teacher', 'admin'), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id } = req.params;
+    
+    const { error } = await supabaseAdmin
+      .from('attendance')
+      .delete()
+      .eq('id', id);
+
+    if (error) throw new AppError('Failed to delete attendance record', 500);
+    
+    return res.status(204).send();
+  } catch (err) {
+    return next(err);
+  }
+});
+// GET /attendance/students/:classId - Récupérer les élèves d'une classe
+router.get('/students/:classId', authorize('teacher', 'admin'), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { classId } = req.params;
+
+    const { data: students, error } = await supabaseAdmin
+      .from('students')
+      .select(`
+        id,
+        profile_id,
+        student_number,
+        users:profile_id(first_name, last_name, email)
+      `)
+      .eq('class_id', classId);
+
+    if (error) throw new AppError('Failed to fetch students', 500);
+
+    // Formater la réponse
+    const formattedStudents = (students || []).map((s: any) => ({
+      id: s.id,
+      profile_id: s.profile_id,
+      student_number: s.student_number,
+      users: s.users && Array.isArray(s.users) ? s.users[0] : s.users
+    }));
+
+    return res.json(successResponse(formattedStudents || []));
   } catch (err) {
     return next(err);
   }

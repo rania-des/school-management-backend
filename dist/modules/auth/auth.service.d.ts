@@ -24,8 +24,10 @@ export declare class AuthService {
     }): Promise<{
         message: string;
         userId: string;
+        roleId: string;
     }>;
     private createRoleRecord;
+    private getRoleId;
     refreshToken(refreshToken: string): Promise<{
         accessToken: string;
         refreshToken: string;
@@ -51,6 +53,7 @@ export declare class AuthService {
         address: any;
         avatarUrl: any;
         dateOfBirth: any;
+        roleId: any;
         roleData: any;
     }>;
 }

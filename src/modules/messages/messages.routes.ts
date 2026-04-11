@@ -27,7 +27,7 @@ router.get('/conversations', async (req: Request, res: Response, next: NextFunct
           created_at,
           conversation_participants(
             profile_id,
-            profiles(first_name, last_name, avatar_url, role)
+            users(first_name, last_name, avatar_url, role)
           )
         )
       `)
@@ -41,7 +41,7 @@ router.get('/conversations', async (req: Request, res: Response, next: NextFunct
       (data || []).map(async (item: any) => {
         const { data: lastMsg } = await supabaseAdmin
           .from('messages')
-          .select('content, created_at, sender_id, profiles(first_name, last_name)')
+          .select('content, created_at, sender_id, users(first_name, last_name)')
           .eq('conversation_id', item.conversation_id)
           .eq('is_deleted', false)
           .order('created_at', { ascending: false })
@@ -142,7 +142,7 @@ router.get('/conversations/:id/messages', async (req: Request, res: Response, ne
       .from('messages')
       .select(`
         *,
-        profiles(first_name, last_name, avatar_url, role)
+        users(first_name, last_name, avatar_url, role)
       `, { count: 'exact' })
       .eq('conversation_id', req.params.id)
       .eq('is_deleted', false)
@@ -193,7 +193,7 @@ router.post('/conversations/:id/messages', upload.single('file'), async (req: Re
         content: content || '',
         file_url: fileUrl,
       })
-      .select('*, profiles(first_name, last_name, avatar_url)')
+      .select('*, users(first_name, last_name, avatar_url)')
       .single();
 
     if (error) throw new AppError('Failed to send message', 500);

@@ -24,3 +24,12 @@ export const uploadRateLimit = rateLimit({
   legacyHeaders: false,
   message: { error: 'Upload limit reached, please try again later' },
 });
+
+// Rate limit pour les endpoints sensibles (notes, absences)
+export const strictRateLimit = rateLimit({
+  windowMs: 5 * 60 * 1000, // 5 minutes
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please slow down' },
+});

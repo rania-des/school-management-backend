@@ -28,14 +28,13 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
 
     let query = supabaseAdmin
       .from('announcements')
-      .select(`*, profiles(first_name, last_name, role), classes(name)`, { count: 'exact' })
+      .select(`*, users(first_name, last_name, role), classes(name)`, { count: 'exact' })
       .order('is_pinned', { ascending: false })
       .order('published_at', { ascending: false })
       .range(offset, offset + limit - 1);
 
-    // ✅ Filtre expiration — utilise deux filtres séparés au lieu de .or()
+    // ✅ Filtre expiration
     query = query.or(`expires_at.is.null,expires_at.gt.${now}`);
-    
 
     // ✅ Filtre par rôle
     if (role === 'student') {
@@ -57,8 +56,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
       } else {
         query = query.is('class_id', null);
       }
-    } 
-    // admin voit tout — pas de filtre supplémentaire
+    }
 
     if (classId === 'null') {
       query = query.is('class_id', null);

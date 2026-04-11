@@ -11,19 +11,18 @@ router.use(auth_middleware_1.authenticate);
 const slotSchema = zod_1.z.object({
     classId: zod_1.z.string().uuid(),
     subjectId: zod_1.z.string().uuid(),
-    teacherId: zod_1.z.string().uuid(),
+    teacherId: zod_1.z.string().uuid().optional().nullable(),
     academicYearId: zod_1.z.string().uuid(),
     dayOfWeek: zod_1.z.enum(['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']),
     startTime: zod_1.z.string().regex(/^\d{2}:\d{2}$/),
     endTime: zod_1.z.string().regex(/^\d{2}:\d{2}$/),
-    room: zod_1.z.string().optional(),
+    room: zod_1.z.string().optional().nullable(),
 });
-// GET /schedule - get schedule for current user's class
+// GET /schedule
 router.get('/', async (req, res, next) => {
     try {
         let classId = req.query.classId;
         const { academicYearId } = req.query;
-        // Resolve classId based on role
         if (!classId) {
             if (req.user.role === 'student') {
                 const { data } = await supabase_1.supabaseAdmin
@@ -46,12 +45,7 @@ router.get('/', async (req, res, next) => {
             throw new error_middleware_1.AppError('classId is required', 400);
         let query = supabase_1.supabaseAdmin
             .from('schedule_slots')
-            .select(`
-        *,
-        subjects(name, code, color),
-        teachers(profiles(first_name, last_name)),
-        classes(name)
-      `)
+            .select(`*, subjects(name, code, color), teachers(users(first_name, last_name)), classes(name)`)
             .eq('class_id', classId)
             .eq('is_active', true)
             .order('day_of_week')
@@ -61,7 +55,6 @@ router.get('/', async (req, res, next) => {
         const { data, error } = await query;
         if (error)
             throw new error_middleware_1.AppError('Failed to fetch schedule', 500);
-        // Group by day
         const grouped = {};
         (data || []).forEach((slot) => {
             if (!grouped[slot.day_of_week])
@@ -74,7 +67,7 @@ router.get('/', async (req, res, next) => {
         return next(err);
     }
 });
-// GET /schedule/teacher - teacher's own schedule
+// GET /schedule/teacher
 router.get('/teacher', (0, auth_middleware_1.authorize)('teacher', 'admin'), async (req, res, next) => {
     try {
         const { academicYearId } = req.query;
@@ -109,18 +102,34 @@ router.get('/teacher', (0, auth_middleware_1.authorize)('teacher', 'admin'), asy
         return next(err);
     }
 });
-// POST /schedule - admin creates a slot
+// POST /schedule
 router.post('/', (0, auth_middleware_1.authorize)('admin'), async (req, res, next) => {
     try {
         const body = slotSchema.parse(req.body);
-        // Check for conflicts
+        // Résoudre teachers.id depuis profile_id si nécessaire
+        let finalTeacherId = null;
+        if (body.teacherId) {
+            const { data: teacherDirect } = await supabase_1.supabaseAdmin
+                .from('teachers').select('id').eq('id', body.teacherId).maybeSingle();
+            if (teacherDirect) {
+                finalTeacherId = teacherDirect.id;
+            }
+            else {
+                const { data: teacherByProfile } = await supabase_1.supabaseAdmin
+                    .from('teachers').select('id').eq('profile_id', body.teacherId).maybeSingle();
+                if (teacherByProfile)
+                    finalTeacherId = teacherByProfile.id;
+            }
+        }
+        // Conflict check
         const { data: existing } = await supabase_1.supabaseAdmin
             .from('schedule_slots')
             .select('id')
             .eq('class_id', body.classId)
             .eq('day_of_week', body.dayOfWeek)
             .eq('is_active', true)
-            .or(`start_time.lte.${body.endTime},end_time.gte.${body.startTime}`);
+            .lt('start_time', body.endTime)
+            .gt('end_time', body.startTime);
         if (existing && existing.length > 0) {
             throw new error_middleware_1.AppError('Schedule conflict detected for this class', 409);
         }
@@ -129,45 +138,18 @@ router.post('/', (0, auth_middleware_1.authorize)('admin'), async (req, res, nex
             .insert({
             class_id: body.classId,
             subject_id: body.subjectId,
-            teacher_id: body.teacherId,
+            teacher_id: finalTeacherId,
             academic_year_id: body.academicYearId,
             day_of_week: body.dayOfWeek,
             start_time: body.startTime,
             end_time: body.endTime,
-            room: body.room,
+            room: body.room || null,
         })
             .select()
             .single();
         if (error)
-            throw new error_middleware_1.AppError('Failed to create schedule slot', 500);
+            throw new error_middleware_1.AppError(`Failed to create schedule slot: ${error.message}`, 500);
         return res.status(201).json((0, pagination_1.successResponse)(data));
-    }
-    catch (err) {
-        return next(err);
-    }
-});
-// PATCH /schedule/:id
-router.patch('/:id', (0, auth_middleware_1.authorize)('admin'), async (req, res, next) => {
-    try {
-        const updates = slotSchema.partial().parse(req.body);
-        const mapped = {};
-        if (updates.dayOfWeek)
-            mapped.day_of_week = updates.dayOfWeek;
-        if (updates.startTime)
-            mapped.start_time = updates.startTime;
-        if (updates.endTime)
-            mapped.end_time = updates.endTime;
-        if (updates.room !== undefined)
-            mapped.room = updates.room;
-        if (updates.teacherId)
-            mapped.teacher_id = updates.teacherId;
-        if (updates.subjectId)
-            mapped.subject_id = updates.subjectId;
-        const { data, error } = await supabase_1.supabaseAdmin
-            .from('schedule_slots').update(mapped).eq('id', req.params.id).select().single();
-        if (error || !data)
-            throw new error_middleware_1.AppError('Slot not found', 404);
-        return res.json((0, pagination_1.successResponse)(data));
     }
     catch (err) {
         return next(err);

@@ -3,6 +3,8 @@ export interface AuthUser {
     id: string;
     email: string;
     role: string;
+    firstName?: string;
+    lastName?: string;
     profile?: Record<string, unknown>;
 }
 declare global {

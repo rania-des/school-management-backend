@@ -8,7 +8,7 @@ export class AuthService {
     if (error || !data.session) throw new AppError('Email ou mot de passe incorrect', 401);
 
     const { data: profile } = await supabaseAdmin
-      .from('profiles').select('*').eq('id', data.user.id).single();
+      .from('users').select('*').eq('id', data.user.id).single();
 
     return {
       accessToken: data.session.access_token,
@@ -31,7 +31,7 @@ export class AuthService {
   }) {
     // ✅ Vérification explicite : email déjà utilisé ?
     const { data: existingProfile } = await supabaseAdmin
-      .from('profiles')
+      .from('users')
       .select('id')
       .eq('email', payload.email.toLowerCase())
       .maybeSingle();
@@ -42,6 +42,10 @@ export class AuthService {
 
     const { data, error } = await supabaseAdmin.auth.admin.createUser({
       email: payload.email, password: payload.password, email_confirm: true,
+      user_metadata: {
+        first_name: payload.firstName,
+        last_name: payload.lastName,
+      },
     });
 
     if (error || !data.user) {
@@ -52,15 +56,16 @@ export class AuthService {
 
     const userId = data.user.id;
 
-    const { error: profileError } = await supabaseAdmin.from('profiles').insert({
+    const { error: profileError } = await supabaseAdmin.from('users').insert({
       id: userId, role: payload.role,
       first_name: payload.firstName, last_name: payload.lastName,
+      email: payload.email,
       gender: payload.gender, phone: payload.phone, date_of_birth: payload.dateOfBirth,
     });
 
     if (profileError) {
       await supabaseAdmin.auth.admin.deleteUser(userId);
-      throw new AppError('Échec de la création du profil', 500);
+      throw new AppError(`Échec de la création du profil: ${profileError.message}`, 500);
     }
 
     await this.createRoleRecord(userId, payload.role);
@@ -145,7 +150,7 @@ export class AuthService {
 
   async getMe(userId: string) {
     const { data: profile, error } = await supabaseAdmin
-      .from('profiles').select('*').eq('id', userId).single();
+      .from('users').select('*').eq('id', userId).single();
     if (error || !profile) throw new AppError('Profil non trouvé', 404);
 
     let roleData = null;
@@ -154,7 +159,7 @@ export class AuthService {
     if (profile.role === 'student') {
       const { data } = await supabaseAdmin
         .from('students')
-        .select('*, classes(name, levels(name)), parent_student(*, parents(*, profiles(first_name, last_name, email, phone)))')
+        .select('*, classes(name, levels(name)), parent_student(*, parents(*, users(first_name, last_name, email, phone)))')
         .eq('profile_id', userId).single();
       roleData = data; roleId = data?.id;
     } else if (profile.role === 'teacher') {
@@ -164,13 +169,13 @@ export class AuthService {
     } else if (profile.role === 'parent') {
       const { data } = await supabaseAdmin
         .from('parents')
-        .select('*, parent_student(*, students(*, profiles(first_name, last_name), classes(name)))')
+        .select('*, parent_student(*, students(*, users(first_name, last_name), classes(name)))')
         .eq('profile_id', userId).single();
       roleData = data; roleId = data?.id;
     }
 
     return {
-      id: profile.id, email: profile.email || profile.id,
+      id: profile.id, email: profile.email,
       role: profile.role, firstName: profile.first_name, lastName: profile.last_name,
       gender: profile.gender, phone: profile.phone, address: profile.address,
       avatarUrl: profile.avatar_url, dateOfBirth: profile.date_of_birth,

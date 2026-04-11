@@ -37,6 +37,9 @@ const errorHandler = (err, _req, res, _next) => {
         if (code === '23503') {
             return res.status(400).json({ error: 'Referenced resource not found' });
         }
+        if (code === 'PGRST116') {
+            return res.status(404).json({ error: 'Resource not found' });
+        }
     }
     // Unhandled errors
     console.error('Unhandled error:', err);

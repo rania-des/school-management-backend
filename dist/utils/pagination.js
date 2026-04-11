@@ -1,10 +1,14 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.successResponse = exports.paginate = exports.getPagination = void 0;
-const constants_1 = require("../config/constants");
+exports.successResponse = exports.paginate = exports.getPagination = exports.PAGINATION = void 0;
+exports.PAGINATION = {
+    DEFAULT_PAGE: 1,
+    DEFAULT_LIMIT: 20,
+    MAX_LIMIT: 100,
+};
 const getPagination = (req) => {
-    const page = Math.max(1, parseInt(req.query.page) || constants_1.PAGINATION.DEFAULT_PAGE);
-    const limit = Math.min(constants_1.PAGINATION.MAX_LIMIT, parseInt(req.query.limit) || constants_1.PAGINATION.DEFAULT_LIMIT);
+    const page = Math.max(1, parseInt(req.query.page) || exports.PAGINATION.DEFAULT_PAGE);
+    const limit = Math.min(exports.PAGINATION.MAX_LIMIT, parseInt(req.query.limit) || exports.PAGINATION.DEFAULT_LIMIT);
     const offset = (page - 1) * limit;
     return { page, limit, offset };
 };

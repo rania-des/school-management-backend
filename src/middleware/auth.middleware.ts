@@ -1,11 +1,12 @@
 import { Request, Response, NextFunction } from 'express';
-import { supabaseAdmin, getSupabaseClient } from '../config/supabase';
-import { HTTP_STATUS } from '../config/constants';
+import { supabaseAdmin } from '../config/supabase';
 
 export interface AuthUser {
   id: string;
   email: string;
   role: string;
+  firstName?: string;
+  lastName?: string;
   profile?: Record<string, unknown>;
 }
 
@@ -22,7 +23,7 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith('Bearer ')) {
-      return res.status(HTTP_STATUS.UNAUTHORIZED).json({
+      return res.status(401).json({
         error: 'Missing or invalid authorization header',
       });
     }
@@ -31,27 +32,21 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
     const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
 
     if (error || !user) {
-      return res.status(HTTP_STATUS.UNAUTHORIZED).json({
+      return res.status(401).json({
         error: 'Invalid or expired token',
       });
     }
 
-    // Fetch profile to get role
-    const { data: profile } = await supabaseAdmin
-      .from('profiles')
-      .select('role, first_name, last_name, is_active')
+    // Fetch profile to get role (table users, pas profiles)
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from('users')
+      .select('role, first_name, last_name')
       .eq('id', user.id)
       .single();
 
-    if (!profile) {
-      return res.status(HTTP_STATUS.UNAUTHORIZED).json({
+    if (profileError || !profile) {
+      return res.status(401).json({
         error: 'User profile not found',
-      });
-    }
-
-    if (!profile.is_active) {
-      return res.status(HTTP_STATUS.FORBIDDEN).json({
-        error: 'Account is deactivated',
       });
     }
 
@@ -59,13 +54,16 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
       id: user.id,
       email: user.email!,
       role: profile.role,
+      firstName: profile.first_name,
+      lastName: profile.last_name,
       profile,
     };
     req.accessToken = token;
 
     return next();
   } catch (err) {
-    return res.status(HTTP_STATUS.INTERNAL).json({ error: 'Authentication failed' });
+    console.error('Auth error:', err);
+    return res.status(500).json({ error: 'Authentication failed' });
   }
 };
 
@@ -73,11 +71,11 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
 export const authorize = (...roles: string[]) => {
   return (req: Request, res: Response, next: NextFunction) => {
     if (!req.user) {
-      return res.status(HTTP_STATUS.UNAUTHORIZED).json({ error: 'Not authenticated' });
+      return res.status(401).json({ error: 'Not authenticated' });
     }
 
     if (!roles.includes(req.user.role)) {
-      return res.status(HTTP_STATUS.FORBIDDEN).json({
+      return res.status(403).json({
         error: `Access denied. Required roles: ${roles.join(', ')}`,
       });
     }

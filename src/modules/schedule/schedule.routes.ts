@@ -48,7 +48,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
 
     let query = supabaseAdmin
       .from('schedule_slots')
-      .select(`*, subjects(name, code, color), teachers(profiles(first_name, last_name)), classes(name)`)
+      .select(`*, subjects(name, code, color), teachers(users(first_name, last_name)), classes(name)`)
       .eq('class_id', classId)
       .eq('is_active', true)
       .order('day_of_week')

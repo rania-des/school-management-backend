@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.uploadRateLimit = exports.authRateLimit = exports.globalRateLimit = void 0;
+exports.strictRateLimit = exports.uploadRateLimit = exports.authRateLimit = exports.globalRateLimit = void 0;
 const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 exports.globalRateLimit = (0, express_rate_limit_1.default)({
     windowMs: 15 * 60 * 1000, // 15 minutes
@@ -26,5 +26,13 @@ exports.uploadRateLimit = (0, express_rate_limit_1.default)({
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Upload limit reached, please try again later' },
+});
+// Rate limit pour les endpoints sensibles (notes, absences)
+exports.strictRateLimit = (0, express_rate_limit_1.default)({
+    windowMs: 5 * 60 * 1000, // 5 minutes
+    max: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests, please slow down' },
 });
 //# sourceMappingURL=rateLimit.middleware.js.map

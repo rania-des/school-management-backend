@@ -279,28 +279,43 @@ router.post('/parent-student', async (req, res, next) => {
             relationship: zod_1.z.string().default('parent'),
             isPrimary: zod_1.z.boolean().default(false),
         }).parse(req.body);
+        // Résoudre parents.id depuis profile_id
+        let finalParentId = body.parentId;
+        const { data: parentDirect } = await supabase_1.supabaseAdmin
+            .from('parents').select('id').eq('id', body.parentId).maybeSingle();
+        if (!parentDirect) {
+            const { data: parentByProfile } = await supabase_1.supabaseAdmin
+                .from('parents').select('id').eq('profile_id', body.parentId).maybeSingle();
+            if (parentByProfile)
+                finalParentId = parentByProfile.id;
+            else
+                throw new error_middleware_1.AppError(`Parent not found for id: ${body.parentId}`, 404);
+        }
+        // Résoudre students.id depuis profile_id
+        let finalStudentId = body.studentId;
+        const { data: studentDirect } = await supabase_1.supabaseAdmin
+            .from('students').select('id').eq('id', body.studentId).maybeSingle();
+        if (!studentDirect) {
+            const { data: studentByProfile } = await supabase_1.supabaseAdmin
+                .from('students').select('id').eq('profile_id', body.studentId).maybeSingle();
+            if (studentByProfile)
+                finalStudentId = studentByProfile.id;
+            else
+                throw new error_middleware_1.AppError(`Student not found for id: ${body.studentId}`, 404);
+        }
         const { data, error } = await supabase_1.supabaseAdmin
             .from('parent_student')
             .insert({
-            parent_id: body.parentId,
-            student_id: body.studentId,
+            parent_id: finalParentId,
+            student_id: finalStudentId,
             relationship: body.relationship,
             is_primary: body.isPrimary,
         })
             .select()
             .single();
         if (error)
-            throw new error_middleware_1.AppError('Failed to link parent and student', 500);
+            throw new error_middleware_1.AppError(`Failed to link: ${error.message}`, 500);
         return res.status(201).json((0, pagination_1.successResponse)(data));
-    }
-    catch (err) {
-        return next(err);
-    }
-});
-router.delete('/parent-student/:id', async (req, res, next) => {
-    try {
-        await supabase_1.supabaseAdmin.from('parent_student').delete().eq('id', req.params.id);
-        return res.status(204).send();
     }
     catch (err) {
         return next(err);
