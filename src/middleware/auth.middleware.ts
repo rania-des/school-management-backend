@@ -24,30 +24,27 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith('Bearer ')) {
       return res.status(401).json({
-        error: 'Missing or invalid authorization header',
+        error: 'Authorization header manquant ou invalide',
       });
     }
 
     const token = authHeader.split(' ')[1];
-    const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
 
+    // Vérifier le JWT Supabase
+    const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
     if (error || !user) {
-      return res.status(401).json({
-        error: 'Invalid or expired token',
-      });
+      return res.status(401).json({ error: 'Token invalide ou expiré' });
     }
 
-    // Fetch profile to get role (table users, pas profiles)
+    // Lire le rôle depuis la table `profiles`
     const { data: profile, error: profileError } = await supabaseAdmin
-      .from('users')
+      .from('profiles')
       .select('role, first_name, last_name')
       .eq('id', user.id)
       .single();
 
     if (profileError || !profile) {
-      return res.status(401).json({
-        error: 'User profile not found',
-      });
+      return res.status(401).json({ error: 'Profil utilisateur introuvable' });
     }
 
     req.user = {
@@ -62,32 +59,30 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
 
     return next();
   } catch (err) {
-    console.error('Auth error:', err);
-    return res.status(500).json({ error: 'Authentication failed' });
+    console.error('Auth middleware error:', err);
+    return res.status(500).json({ error: "Erreur d'authentification" });
   }
 };
 
-// Role-based access control middleware factory
+// ── RBAC helpers ──────────────────────────────────────────────────────────────
+
 export const authorize = (...roles: string[]) => {
   return (req: Request, res: Response, next: NextFunction) => {
     if (!req.user) {
-      return res.status(401).json({ error: 'Not authenticated' });
+      return res.status(401).json({ error: 'Non authentifié' });
     }
-
     if (!roles.includes(req.user.role)) {
       return res.status(403).json({
-        error: `Access denied. Required roles: ${roles.join(', ')}`,
+        error: `Accès refusé. Rôles requis : ${roles.join(', ')}`,
       });
     }
-
     return next();
   };
 };
 
-// Allow multiple roles (shorthand)
-export const isAdmin = authorize('admin');
-export const isTeacher = authorize('teacher', 'admin');
-export const isStudent = authorize('student', 'admin');
-export const isParent = authorize('parent', 'admin');
+export const isAdmin           = authorize('admin');
+export const isTeacher         = authorize('teacher', 'admin');
+export const isStudent         = authorize('student', 'admin');
+export const isParent          = authorize('parent', 'admin');
 export const isTeacherOrParent = authorize('teacher', 'parent', 'admin');
-export const isAuthenticated = authenticate;
+export const isAuthenticated   = authenticate;

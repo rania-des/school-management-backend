@@ -11,22 +11,7 @@ import { errorHandler, notFound } from './middleware/error.middleware';
 
 // Routes
 import authRoutes from './modules/auth/auth.routes';
-import usersRoutes from './modules/users/users.routes';
-import gradesRoutes from './modules/grades/grades.routes';
-import scheduleRoutes from './modules/schedule/schedule.routes';
-import assignmentsRoutes from './modules/assignments/assignments.routes';
-import attendanceRoutes from './modules/attendance/attendance.routes';
-import messagesRoutes from './modules/messages/messages.routes';
-import notificationsRoutes from './modules/notifications/notifications.routes';
-import announcementsRoutes from './modules/announcements/announcements.routes';
-import paymentsRoutes from './modules/payments/payments.routes';
-import canteenRoutes from './modules/canteen/canteen.routes';
-import meetingsRoutes from './modules/meetings/meetings.routes';
-import analyticsRoutes from './modules/analytics/analytics.routes';
-import adminRoutes from './modules/admin/admin.routes';
 import teacherRoutes from './modules/teacher/teacher.routes';
-import parentRoutes from './modules/parent/parent.routes';
-import studentRoutes from './modules/student/student.routes';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -38,20 +23,23 @@ app.use(helmet({
 }));
 
 app.use(cors({
-  origin: function(origin, callback) {
+  origin: function (origin, callback) {
     const allowed = [
       'http://localhost:5173',
       'http://localhost:3000',
-      'https://school-frontend-wine.vercel.app',
-      'https://school-management-frontend.vercel.app',
       process.env.FRONTEND_URL,
     ].filter(Boolean) as string[];
 
-    if (!origin || allowed.includes(origin) || /\.vercel\.app$/.test(origin) || /\.railway\.app$/.test(origin)) {
+    if (
+      !origin ||
+      allowed.includes(origin) ||
+      /\.vercel\.app$/.test(origin) ||
+      /\.railway\.app$/.test(origin)
+    ) {
       callback(null, true);
     } else {
       console.log('CORS blocked origin:', origin);
-      callback(null, true);
+      callback(null, true); // permissif en prod, restreindre si besoin
     }
   },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
@@ -79,28 +67,9 @@ app.get('/health', (_req, res) => {
 
 const API = '/api/v1';
 
-// Routes principales
 app.use(`${API}/auth`, authRateLimit, authRoutes);
-app.use(`${API}/users`, usersRoutes);
-app.use(`${API}/grades`, gradesRoutes);
-app.use(`${API}/schedule`, scheduleRoutes);
-app.use(`${API}/assignments`, assignmentsRoutes);
-app.use(`${API}/attendance`, attendanceRoutes);
-app.use(`${API}/messages`, messagesRoutes);
-app.use(`${API}/notifications`, notificationsRoutes);
-app.use(`${API}/announcements`, announcementsRoutes);
-app.use(`${API}/payments`, paymentsRoutes);
-app.use(`${API}/canteen`, canteenRoutes);
-app.use(`${API}/meetings`, meetingsRoutes);
-app.use(`${API}/analytics`, analyticsRoutes);
-app.use(`${API}/admin`, adminRoutes);
-
-// Routes spécifiques par rôle
 app.use(`${API}/teacher`, teacherRoutes);
-app.use(`${API}/parents`, parentRoutes);
-app.use(`${API}/students`, studentRoutes);
 
-// Route de test pour vérifier que l'API fonctionne
 app.get(`${API}/ping`, (_req, res) => {
   res.json({ message: 'pong', timestamp: new Date().toISOString() });
 });
@@ -109,9 +78,5 @@ app.get(`${API}/ping`, (_req, res) => {
 
 app.use(notFound);
 app.use(errorHandler);
-
-// ==================== EXPORT ====================
-// ⚠️ NE PAS METTRE app.listen() ICI ! ⚠️
-// Le serveur est démarré dans server.ts
 
 export default app;

@@ -10,7 +10,7 @@ export const globalRateLimit = rateLimit({
 
 export const authRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 20, // strict limit for auth endpoints
+  max: 20,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many authentication attempts, please try again later' },
@@ -25,7 +25,6 @@ export const uploadRateLimit = rateLimit({
   message: { error: 'Upload limit reached, please try again later' },
 });
 
-// Rate limit pour les endpoints sensibles (notes, absences)
 export const strictRateLimit = rateLimit({
   windowMs: 5 * 60 * 1000, // 5 minutes
   max: 30,

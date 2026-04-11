@@ -32,23 +32,15 @@ export const errorHandler = (
 
   // Known operational errors
   if (err instanceof AppError) {
-    return res.status(err.statusCode).json({
-      error: err.message,
-    });
+    return res.status(err.statusCode).json({ error: err.message });
   }
 
   // Supabase / PostgreSQL errors
   if ((err as any).code) {
     const code = (err as any).code;
-    if (code === '23505') {
-      return res.status(409).json({ error: 'Resource already exists' });
-    }
-    if (code === '23503') {
-      return res.status(400).json({ error: 'Referenced resource not found' });
-    }
-    if (code === 'PGRST116') {
-      return res.status(404).json({ error: 'Resource not found' });
-    }
+    if (code === '23505') return res.status(409).json({ error: 'Resource already exists' });
+    if (code === '23503') return res.status(400).json({ error: 'Referenced resource not found' });
+    if (code === 'PGRST116') return res.status(404).json({ error: 'Resource not found' });
   }
 
   // Unhandled errors

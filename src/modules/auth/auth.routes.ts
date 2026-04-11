@@ -4,16 +4,17 @@ import { authenticate } from '../../middleware/auth.middleware';
 
 const router = Router();
 
-// Public routes
-router.post('/login', authController.login.bind(authController));
-router.post('/register', authController.register.bind(authController));
-router.post('/refresh', authController.refresh.bind(authController));
+// ── Routes publiques ──────────────────────────────────────────────────────────
+router.post('/login',           authController.login.bind(authController));
+router.post('/register',        authController.register.bind(authController));
+router.post('/refresh',         authController.refresh.bind(authController));
 router.post('/forgot-password', authController.forgotPassword.bind(authController));
+router.post('/reset-password',  authController.resetPasswordWithToken.bind(authController));
 
-// Protected routes
+// ── Routes protégées (JWT requis) ─────────────────────────────────────────────
 router.use(authenticate);
-router.post('/logout', authController.logout.bind(authController));
-router.get('/me', authController.getMe.bind(authController));
+router.post('/logout',    authController.logout.bind(authController));
+router.get('/me',         authController.getMe.bind(authController));
 router.patch('/password', authController.updatePassword.bind(authController));
 
 export default router;
