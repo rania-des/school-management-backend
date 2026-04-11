@@ -18,8 +18,6 @@ import { errorHandler, notFound } from './middleware/error.middleware';
 import authRoutes from './modules/auth/auth.routes';
 import teacherRoutes from './modules/teacher/teacher.routes';
 
-console.log('🔵 Routes imported successfully');
-
 const app = express();
 app.set('trust proxy', 1);
 
