@@ -11,15 +11,10 @@ if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error('Missing Supabase environment variables');
 }
 
-// Client public pour l'authentification (utilise ANON_KEY)
-export const supabasePublic = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    autoRefreshToken: false,
-    persistSession: false,
-  },
-});
+// Client public pour l'authentification
+export const supabasePublic = createClient(supabaseUrl, supabaseAnonKey);
 
-// Client admin pour les opérations admin (utilise SERVICE_ROLE_KEY)
+// Client admin pour les opérations admin
 export const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
   auth: {
     autoRefreshToken: false,
