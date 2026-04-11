@@ -31,7 +31,6 @@ const parent_routes_1 = __importDefault(require("./modules/parent/parent.routes"
 const student_routes_1 = __importDefault(require("./modules/student/student.routes"));
 const app = (0, express_1.default)();
 app.set('trust proxy', 1);
-const PORT = parseInt(process.env.PORT || '3000', 10);
 // ==================== MIDDLEWARE ====================
 app.use((0, helmet_1.default)({
     crossOriginResourcePolicy: { policy: 'cross-origin' },
@@ -98,18 +97,8 @@ app.get(`${API}/ping`, (_req, res) => {
 // ==================== ERROR HANDLING ====================
 app.use(error_middleware_1.notFound);
 app.use(error_middleware_1.errorHandler);
-// ==================== START SERVER ====================
-app.listen(PORT, () => {
-    console.log(`
-╔════════════════════════════════════════════════════════════╗
-║                                                            ║
-║     🏫 School Management Platform API                      ║
-║     🚀 Running on port ${PORT}                                  ║
-║     🌍 Environment: ${process.env.NODE_ENV?.padEnd(16)}         ║
-║     📡 API Base: ${API}                                      ║
-║                                                            ║
-╚════════════════════════════════════════════════════════════╝
-  `);
-});
+// ==================== EXPORT ====================
+// ⚠️ NE PAS METTRE app.listen() ICI ! ⚠️
+// Le serveur est démarré dans server.ts
 exports.default = app;
 //# sourceMappingURL=app.js.map

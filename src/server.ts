@@ -1,9 +1,17 @@
-// src/server.ts
 import app from './app';
 
-const PORT = process.env.PORT || 3000;
+const PORT = parseInt(process.env.PORT || '3000', 10);
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📝 Environment: ${process.env.NODE_ENV}`);
+// Démarrer le serveur uniquement ici
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`
+╔════════════════════════════════════════════════════════════╗
+║                                                            ║
+║     🏫 School Management Platform API                      ║
+║     🚀 Running on port ${PORT}                                  ║
+║     🌍 Environment: ${process.env.NODE_ENV?.padEnd(16)}         ║
+║     📡 API Base: /api/v1                                      ║
+║                                                            ║
+╚════════════════════════════════════════════════════════════╝
+  `);
 });

@@ -30,7 +30,6 @@ import studentRoutes from './modules/student/student.routes';
 
 const app = express();
 app.set('trust proxy', 1);
-const PORT = parseInt(process.env.PORT || '3000', 10);
 
 // ==================== MIDDLEWARE ====================
 
@@ -111,19 +110,8 @@ app.get(`${API}/ping`, (_req, res) => {
 app.use(notFound);
 app.use(errorHandler);
 
-// ==================== START SERVER ====================
-
-app.listen(PORT, () => {
-  console.log(`
-╔════════════════════════════════════════════════════════════╗
-║                                                            ║
-║     🏫 School Management Platform API                      ║
-║     🚀 Running on port ${PORT}                                  ║
-║     🌍 Environment: ${process.env.NODE_ENV?.padEnd(16)}         ║
-║     📡 API Base: ${API}                                      ║
-║                                                            ║
-╚════════════════════════════════════════════════════════════╝
-  `);
-});
+// ==================== EXPORT ====================
+// ⚠️ NE PAS METTRE app.listen() ICI ! ⚠️
+// Le serveur est démarré dans server.ts
 
 export default app;
