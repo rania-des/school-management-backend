@@ -1,4 +1,4 @@
-console.log('🔥🔥🔥 AUTH SERVICE CHARGÉ AVEC LA NOUVELLE VERSION 🔥🔥🔥');
+console.log('🔥🔥🔥 AUTH SERVICE CHARGÉ 🔥🔥🔥');
 
 import { supabaseAdmin, supabasePublic } from '../../config/supabase';
 import { AppError } from '../../middleware/error.middleware';
@@ -6,28 +6,24 @@ import { sendWelcomeEmail } from '../../utils/email';
 
 export class AuthService {
 
-  // ── Login via Supabase Auth (avec ANON_KEY) ─────────────────────────────────
+  // ── Login ──────────────────────────────────────────────────────────────────
   async login(email: string, password: string) {
     console.log('🔵 === LOGIN ATTEMPT ===');
     console.log('🔵 Email:', email);
-    console.log('🔵 Password length:', password?.length);
-    console.log('🔵 Using supabasePublic for login');
 
     const { data, error } = await supabasePublic.auth.signInWithPassword({
-      email: email.trim(),
-      password
+      email: email.trim().toLowerCase(),
+      password,
     });
 
-    console.log('🔵 Error from Supabase:', error?.message || 'No error');
-    console.log('🔵 Session exists:', !!data.session);
-    console.log('🔵 User exists:', !!data.user);
+    console.log('🔵 Supabase auth error:', error?.message || 'aucun');
+    console.log('🔵 Session:', !!data.session);
+    console.log('🔵 User:', !!data.user);
 
     if (error || !data.session) {
       console.log('🔴 Login failed:', error?.message);
       throw new AppError('Email ou mot de passe incorrect', 401);
     }
-
-    console.log('🔵 Login successful! User ID:', data.user.id);
 
     const { data: profile, error: profileError } = await supabaseAdmin
       .from('profiles')
@@ -36,7 +32,7 @@ export class AuthService {
       .single();
 
     console.log('🔵 Profile found:', !!profile);
-    console.log('🔵 Profile error:', profileError?.message || 'No error');
+    console.log('🔵 Profile error:', profileError?.message || 'aucun');
 
     if (profileError || !profile) {
       throw new AppError('Profil introuvable', 404);
@@ -72,6 +68,7 @@ export class AuthService {
     console.log('🔵 Email:', payload.email);
     console.log('🔵 Role:', payload.role);
 
+    // Vérifier si l'email existe déjà dans profiles
     const { data: existingProfile } = await supabaseAdmin
       .from('profiles')
       .select('id')
@@ -79,48 +76,53 @@ export class AuthService {
       .maybeSingle();
 
     if (existingProfile) {
-      console.log('🔴 Email already exists in profiles');
       throw new AppError('Cette adresse email est déjà utilisée', 409);
     }
 
+    // Créer l'utilisateur via admin API (email déjà confirmé)
     const { data, error } = await supabaseAdmin.auth.admin.createUser({
-      email: payload.email,
+      email: payload.email.trim().toLowerCase(),
       password: payload.password,
       email_confirm: true,
-      user_metadata: { first_name: payload.firstName, last_name: payload.lastName },
+      user_metadata: {
+        first_name: payload.firstName,
+        last_name: payload.lastName,
+      },
     });
 
     console.log('🔵 Auth user created:', !!data.user);
-    console.log('🔵 Auth error:', error?.message || 'No error');
+    console.log('🔵 Auth error:', error?.message || 'aucun');
 
     if (error || !data.user) {
-      if (error?.message.includes('already') || error?.message.includes('registered')) {
+      if (error?.message?.includes('already') || error?.message?.includes('registered')) {
         throw new AppError('Cette adresse email est déjà utilisée', 409);
       }
-      throw new AppError('Échec de la création du compte', 400);
+      console.log('🔴 createUser failed:', error?.message);
+      throw new AppError(`Échec de la création du compte: ${error?.message}`, 400);
     }
 
     const userId = data.user.id;
     console.log('🔵 User ID:', userId);
 
+    // Créer le profil
     const { error: profileError } = await supabaseAdmin.from('profiles').insert({
       id: userId,
       role: payload.role,
       first_name: payload.firstName,
       last_name: payload.lastName,
-      email: payload.email,
-      gender: payload.gender,
-      phone: payload.phone,
-      date_of_birth: payload.dateOfBirth,
+      email: payload.email.trim().toLowerCase(),
+      gender: payload.gender ?? null,
+      phone: payload.phone ?? null,
+      date_of_birth: payload.dateOfBirth ?? null,
     });
 
     if (profileError) {
-      console.log('🔴 Profile creation error:', profileError.message);
+      console.log('🔴 Profile error:', profileError.message);
       await supabaseAdmin.auth.admin.deleteUser(userId);
       throw new AppError(`Échec de la création du profil: ${profileError.message}`, 500);
     }
 
-    console.log('✅ Profile created successfully');
+    console.log('✅ Profile created');
 
     await this.createRoleRecord(userId, payload.role);
     const roleId = await this.getRoleId(userId, payload.role);
@@ -132,11 +134,8 @@ export class AuthService {
 
   // ── Refresh Token ──────────────────────────────────────────────────────────
   async refreshToken(refreshToken: string) {
-    console.log('🔵 === REFRESH TOKEN ===');
-    
     const { data, error } = await supabasePublic.auth.refreshSession({ refresh_token: refreshToken });
     if (error || !data.session) {
-      console.log('🔴 Refresh failed:', error?.message);
       throw new AppError('Token de rafraîchissement invalide', 401);
     }
     return {
@@ -148,88 +147,56 @@ export class AuthService {
 
   // ── Logout ─────────────────────────────────────────────────────────────────
   async logout(userId: string) {
-    console.log('🔵 === LOGOUT === User:', userId);
     await supabaseAdmin.auth.admin.signOut(userId);
     return { message: 'Déconnexion réussie' };
   }
 
   // ── Forgot Password ────────────────────────────────────────────────────────
   async forgotPassword(email: string) {
-    console.log('🔵 === FORGOT PASSWORD === Email:', email);
-    
     const redirectUrl = `${process.env.FRONTEND_URL}/reset-password`;
     const { error } = await supabasePublic.auth.resetPasswordForEmail(email, {
       redirectTo: redirectUrl,
     });
-    if (error) {
-      console.log('🔴 Forgot password error:', error.message);
-      throw new AppError("Échec de l'envoi de l'email de réinitialisation", 500);
-    }
+    if (error) throw new AppError("Échec de l'envoi de l'email de réinitialisation", 500);
     return { message: 'Email de réinitialisation envoyé' };
   }
 
-  // ── Reset Password avec token ──────────────────────────────────────────────
+  // ── Reset Password ─────────────────────────────────────────────────────────
   async resetPasswordWithToken(token: string, newPassword: string) {
-    console.log('🔵 === RESET PASSWORD WITH TOKEN ===');
-    
     const { data, error } = await supabasePublic.auth.getUser(token);
-    if (error || !data.user) {
-      console.log('🔴 Invalid token:', error?.message);
-      throw new AppError('Token invalide ou expiré', 401);
-    }
-
-    console.log('🔵 User found:', data.user.id);
+    if (error || !data.user) throw new AppError('Token invalide ou expiré', 401);
 
     const { error: updateError } = await supabaseAdmin.auth.admin.updateUserById(data.user.id, {
       password: newPassword,
     });
-
-    if (updateError) {
-      console.log('🔴 Update password error:', updateError.message);
-      throw new AppError('Échec de la réinitialisation du mot de passe', 500);
-    }
-
+    if (updateError) throw new AppError('Échec de la réinitialisation du mot de passe', 500);
     return { message: 'Mot de passe réinitialisé avec succès' };
   }
 
-  // ── Update Password (connecté) ─────────────────────────────────────────────
+  // ── Update Password ────────────────────────────────────────────────────────
   async updatePassword(userId: string, newPassword: string) {
-    console.log('🔵 === UPDATE PASSWORD === User:', userId);
-    
     const { error } = await supabaseAdmin.auth.admin.updateUserById(userId, {
       password: newPassword,
     });
-    if (error) {
-      console.log('🔴 Update password error:', error.message);
-      throw new AppError('Échec de la mise à jour du mot de passe', 500);
-    }
+    if (error) throw new AppError('Échec de la mise à jour du mot de passe', 500);
     return { message: 'Mot de passe mis à jour avec succès' };
   }
 
   // ── Get Me ─────────────────────────────────────────────────────────────────
   async getMe(userId: string) {
-    console.log('🔵 === GET ME === User:', userId);
-    
     const { data: profile, error } = await supabaseAdmin
       .from('profiles')
       .select('*')
       .eq('id', userId)
       .single();
 
-    if (error || !profile) {
-      console.log('🔴 Profile not found:', error?.message);
-      throw new AppError('Profil non trouvé', 404);
-    }
+    if (error || !profile) throw new AppError('Profil non trouvé', 404);
 
     let roleData = null;
     let roleId = null;
 
     if (profile.role === 'teacher') {
-      const { data } = await supabaseAdmin
-        .from('teachers')
-        .select('*')
-        .eq('profile_id', userId)
-        .single();
+      const { data } = await supabaseAdmin.from('teachers').select('*').eq('profile_id', userId).single();
       roleData = data;
       roleId = data?.id;
     } else if (profile.role === 'student') {
@@ -268,8 +235,6 @@ export class AuthService {
 
   // ── Private helpers ────────────────────────────────────────────────────────
   private async createRoleRecord(profileId: string, role: string): Promise<void> {
-    console.log(`🔵 Creating ${role} record for profile:`, profileId);
-    
     if (role === 'student') {
       const { error } = await supabaseAdmin.from('students').insert({
         profile_id: profileId,
@@ -277,7 +242,6 @@ export class AuthService {
         enrollment_date: new Date().toISOString().split('T')[0],
       });
       if (error) console.error('❌ Error creating student record:', error.message);
-      else console.log('✅ Student record created for', profileId);
     } else if (role === 'teacher') {
       const { error } = await supabaseAdmin.from('teachers').insert({
         profile_id: profileId,
@@ -285,11 +249,9 @@ export class AuthService {
         hire_date: new Date().toISOString().split('T')[0],
       });
       if (error) console.error('❌ Error creating teacher record:', error.message);
-      else console.log('✅ Teacher record created for', profileId);
     } else if (role === 'parent') {
       const { error } = await supabaseAdmin.from('parents').insert({ profile_id: profileId });
       if (error) console.error('❌ Error creating parent record:', error.message);
-      else console.log('✅ Parent record created for', profileId);
     }
   }
 
@@ -301,11 +263,7 @@ export class AuthService {
     };
     const table = tableMap[role];
     if (!table) return null;
-    const { data } = await supabaseAdmin
-      .from(table)
-      .select('id')
-      .eq('profile_id', profileId)
-      .single();
+    const { data } = await supabaseAdmin.from(table).select('id').eq('profile_id', profileId).single();
     return data?.id ?? null;
   }
 }
