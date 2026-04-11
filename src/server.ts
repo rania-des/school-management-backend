@@ -1,6 +1,9 @@
-console.log('🚀 === SERVER STARTING WITH DEBUG === 🚀');
+console.log('🚀 === SERVER STARTING ===');
 console.log('🔵 Node version:', process.version);
 console.log('🔵 Environment:', process.env.NODE_ENV);
+console.log('🔵 SUPABASE_URL:', process.env.SUPABASE_URL ? '✅ ' + process.env.SUPABASE_URL : '❌ MANQUANT');
+console.log('🔵 SUPABASE_ANON_KEY:', process.env.SUPABASE_ANON_KEY ? '✅ ' + process.env.SUPABASE_ANON_KEY.substring(0, 20) + '...' : '❌ MANQUANT');
+console.log('🔵 SUPABASE_SERVICE_ROLE_KEY:', process.env.SUPABASE_SERVICE_ROLE_KEY ? '✅ ' + process.env.SUPABASE_SERVICE_ROLE_KEY.substring(0, 20) + '...' : '❌ MANQUANT');
 
 import app from './app';
 
