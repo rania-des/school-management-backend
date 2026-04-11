@@ -1,5 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import { supabaseAdmin } from '../config/supabase';
+import jwt from 'jsonwebtoken';
+
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-me';
 
 export interface AuthUser {
   id: string;
@@ -30,17 +33,23 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
 
     const token = authHeader.split(' ')[1];
 
-    // Vérifier le JWT Supabase
-    const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
-    if (error || !user) {
+    // Vérifier le JWT
+    let decoded: any;
+    try {
+      decoded = jwt.verify(token, JWT_SECRET);
+    } catch (err) {
       return res.status(401).json({ error: 'Token invalide ou expiré' });
+    }
+
+    if (!decoded || !decoded.id) {
+      return res.status(401).json({ error: 'Token invalide' });
     }
 
     // Lire le rôle depuis la table `profiles`
     const { data: profile, error: profileError } = await supabaseAdmin
       .from('profiles')
-      .select('role, first_name, last_name')
-      .eq('id', user.id)
+      .select('role, first_name, last_name, email')
+      .eq('id', decoded.id)
       .single();
 
     if (profileError || !profile) {
@@ -48,8 +57,8 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
     }
 
     req.user = {
-      id: user.id,
-      email: user.email!,
+      id: decoded.id,
+      email: profile.email,
       role: profile.role,
       firstName: profile.first_name,
       lastName: profile.last_name,
