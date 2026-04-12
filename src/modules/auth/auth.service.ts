@@ -1,4 +1,4 @@
-console.log('🔥🔥🔥 AUTH SERVICE V5 🔥🔥🔥');
+console.log('🔥🔥🔥 AUTH SERVICE V6 🔥🔥🔥');
 
 import { createClient } from '@supabase/supabase-js';
 import { AppError } from '../../middleware/error.middleware';
@@ -11,14 +11,17 @@ const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 console.log('🔑 AUTH SERVICE - ANON:', SUPABASE_ANON_KEY ? '✅ ' + SUPABASE_ANON_KEY.substring(0, 15) + '...' : '❌');
 console.log('🔑 AUTH SERVICE - SERVICE:', SUPABASE_SERVICE_KEY ? '✅ ' + SUPABASE_SERVICE_KEY.substring(0, 15) + '...' : '❌');
 
-// Admin client — used only for admin operations (createUser, deleteUser, updateUser)
+// Public client — signInWithPassword works for ALL users regardless of key format
+const supabasePublic = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// Admin client — for admin operations only (createUser, deleteUser, updateUser)
 const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
   auth: { autoRefreshToken: false, persistSession: false },
 });
 
 /**
  * Fetch profile using the user's own access token.
- * This works regardless of which Supabase key format is in use (legacy JWT or new sb_* keys).
+ * Uses anon key + user JWT — bypasses service_role key issues entirely.
  */
 async function fetchProfile(userId: string, accessToken: string) {
   const res = await fetch(
@@ -35,15 +38,15 @@ async function fetchProfile(userId: string, accessToken: string) {
   console.log('🔵 Profile fetch status:', res.status);
 
   if (!res.ok) {
-    const err = await res.json();
+    const err = await res.json() as unknown;
     console.log('🔴 Profile fetch error:', JSON.stringify(err));
     return null;
   }
 
-  const data = await res.json();
+  const data = await res.json() as unknown[];
   const profile = Array.isArray(data) ? data[0] ?? null : null;
-  console.log('🔵 Profile found:', !!profile, profile ? `role=${profile.role}` : '');
-  return profile;
+  console.log('🔵 Profile found:', !!profile);
+  return profile as Record<string, string> | null;
 }
 
 export class AuthService {
@@ -52,39 +55,24 @@ export class AuthService {
     console.log('🔵 === LOGIN ATTEMPT ===');
     console.log('🔵 Email:', email);
 
-    // Step 1: Authenticate with Supabase
-    const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
-      method: 'POST',
-      headers: {
-        'apikey': SUPABASE_ANON_KEY,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
+    // Use SDK signInWithPassword — works for ALL users, same as original
+    const { data, error } = await supabasePublic.auth.signInWithPassword({
+      email: email.trim().toLowerCase(),
+      password,
     });
 
-    console.log('🔵 Auth status:', res.status);
+    console.log('🔵 Auth error:', error?.message || 'aucun');
+    console.log('🔵 Session:', !!data?.session);
 
-    if (!res.ok) {
-      console.log('🔴 Auth failed');
+    if (error || !data?.session) {
       throw new AppError('Email ou mot de passe incorrect', 401);
     }
 
-    const session = await res.json() as {
-      access_token: string;
-      refresh_token: string;
-      expires_in: number;
-      user: { id: string; email: string };
-    };
-
-    if (!session?.access_token || !session?.user?.id) {
-      throw new AppError('Email ou mot de passe incorrect', 401);
-    }
-
-    const userId = session.user.id;
-    const accessToken = session.access_token;
+    const userId = data.user.id;
+    const accessToken = data.session.access_token;
     console.log('🔵 User ID:', userId);
 
-    // Step 2: Fetch profile using user's own token
+    // Fetch profile using user's own token — bypasses service_role key issues
     const profile = await fetchProfile(userId, accessToken);
 
     if (!profile) {
@@ -92,19 +80,19 @@ export class AuthService {
       throw new AppError('Profil introuvable', 404);
     }
 
-    console.log('✅ Login successful! Role:', profile.role);
+    console.log('✅ Login successful! Role:', profile['role']);
 
     return {
       accessToken,
-      refreshToken: session.refresh_token,
-      expiresIn: session.expires_in,
+      refreshToken: data.session.refresh_token,
+      expiresIn: data.session.expires_in,
       user: {
         id: userId,
-        email: session.user.email,
-        role: profile.role,
-        firstName: profile.first_name,
-        lastName: profile.last_name,
-        avatarUrl: profile.avatar_url,
+        email: data.user.email,
+        role: profile['role'],
+        firstName: profile['first_name'],
+        lastName: profile['last_name'],
+        avatarUrl: profile['avatar_url'],
       },
     };
   }
@@ -161,22 +149,12 @@ export class AuthService {
   }
 
   async refreshToken(refreshToken: string) {
-    const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
-      method: 'POST',
-      headers: {
-        'apikey': SUPABASE_ANON_KEY,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ refresh_token: refreshToken }),
-    });
-
-    if (!res.ok) throw new AppError('Token de rafraîchissement invalide', 401);
-
-    const session = await res.json() as { access_token: string; refresh_token: string; expires_in: number };
+    const { data, error } = await supabasePublic.auth.refreshSession({ refresh_token: refreshToken });
+    if (error || !data.session) throw new AppError('Token de rafraîchissement invalide', 401);
     return {
-      accessToken: session.access_token,
-      refreshToken: session.refresh_token,
-      expiresIn: session.expires_in,
+      accessToken: data.session.access_token,
+      refreshToken: data.session.refresh_token,
+      expiresIn: data.session.expires_in,
     };
   }
 
@@ -187,20 +165,13 @@ export class AuthService {
 
   async forgotPassword(email: string) {
     const redirectUrl = `${process.env.FRONTEND_URL}/reset-password`;
-    const res = await fetch(`${SUPABASE_URL}/auth/v1/recover`, {
-      method: 'POST',
-      headers: {
-        'apikey': SUPABASE_ANON_KEY,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ email, gotrue_meta_security: {}, redirect_to: redirectUrl }),
-    });
-    if (!res.ok) throw new AppError("Échec de l'envoi de l'email de réinitialisation", 500);
+    const { error } = await supabasePublic.auth.resetPasswordForEmail(email, { redirectTo: redirectUrl });
+    if (error) throw new AppError("Échec de l'envoi de l'email de réinitialisation", 500);
     return { message: 'Email de réinitialisation envoyé' };
   }
 
   async resetPasswordWithToken(token: string, newPassword: string) {
-    const { data, error } = await supabaseAdmin.auth.getUser(token);
+    const { data, error } = await supabasePublic.auth.getUser(token);
     if (error || !data.user) throw new AppError('Token invalide ou expiré', 401);
     const { error: updateError } = await supabaseAdmin.auth.admin.updateUserById(data.user.id, { password: newPassword });
     if (updateError) throw new AppError('Échec de la réinitialisation du mot de passe', 500);
@@ -221,32 +192,31 @@ export class AuthService {
     let roleId = null;
 
     try {
-      if (profile.role === 'teacher') {
+      if (profile['role'] === 'teacher') {
         const { data } = await supabaseAdmin.from('teachers').select('*').eq('profile_id', userId).single();
         roleData = data; roleId = data?.id;
-      } else if (profile.role === 'student') {
+      } else if (profile['role'] === 'student') {
         const { data } = await supabaseAdmin.from('students').select('*, classes(name, levels(name))').eq('profile_id', userId).single();
         roleData = data; roleId = data?.id;
-      } else if (profile.role === 'parent') {
+      } else if (profile['role'] === 'parent') {
         const { data } = await supabaseAdmin.from('parents').select('*, parent_student(*, students(*, profiles(first_name, last_name), classes(name)))').eq('profile_id', userId).single();
         roleData = data; roleId = data?.id;
       }
     } catch (e) {
-      // Role record may not exist for manually created users — not a fatal error
-      console.log('⚠️ Role record not found for', profile.role, '- non-fatal');
+      console.log('⚠️ Role record not found for', profile['role'], '- non-fatal');
     }
 
     return {
-      id: profile.id,
-      email: profile.email,
-      role: profile.role,
-      firstName: profile.first_name,
-      lastName: profile.last_name,
-      gender: profile.gender,
-      phone: profile.phone,
-      address: profile.address,
-      avatarUrl: profile.avatar_url,
-      dateOfBirth: profile.date_of_birth,
+      id: profile['id'],
+      email: profile['email'],
+      role: profile['role'],
+      firstName: profile['first_name'],
+      lastName: profile['last_name'],
+      gender: profile['gender'],
+      phone: profile['phone'],
+      address: profile['address'],
+      avatarUrl: profile['avatar_url'],
+      dateOfBirth: profile['date_of_birth'],
       roleId,
       roleData,
     };
