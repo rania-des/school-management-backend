@@ -41,7 +41,7 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
       return res.status(401).json({ error: 'Token invalide ou expiré' });
     }
 
-    const user = await userRes.json();
+    const user = await userRes.json() as { id: string; email: string };
     if (!user?.id) {
       return res.status(401).json({ error: 'Token invalide ou expiré' });
     }

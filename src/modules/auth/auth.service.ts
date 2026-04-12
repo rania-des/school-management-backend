@@ -69,7 +69,12 @@ export class AuthService {
       throw new AppError('Email ou mot de passe incorrect', 401);
     }
 
-    const session = await res.json();
+    const session = await res.json() as {
+      access_token: string;
+      refresh_token: string;
+      expires_in: number;
+      user: { id: string; email: string };
+    };
 
     if (!session?.access_token || !session?.user?.id) {
       throw new AppError('Email ou mot de passe incorrect', 401);
@@ -167,7 +172,7 @@ export class AuthService {
 
     if (!res.ok) throw new AppError('Token de rafraîchissement invalide', 401);
 
-    const session = await res.json();
+    const session = await res.json() as { access_token: string; refresh_token: string; expires_in: number };
     return {
       accessToken: session.access_token,
       refreshToken: session.refresh_token,
