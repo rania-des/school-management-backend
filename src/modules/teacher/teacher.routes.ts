@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { Router } from 'express';
 import { authenticate, authorize } from '../../middleware/auth.middleware';
 import { AppError } from '../../middleware/error.middleware';
 import { successResponse } from '../../utils/pagination';
@@ -23,7 +24,7 @@ function sbHeaders() {
   };
 }
 
-async function sbGet(table: string, params: string = ''): Promise<any[]> {
+async function sbGet(table: string, params: string = ''): Promise<any> {
   const url = `${SUPABASE_URL}/rest/v1/${table}${params ? '?' + params : ''}`;
   const res = await fetch(url, { headers: sbHeaders() });
   if (!res.ok) {
@@ -32,10 +33,10 @@ async function sbGet(table: string, params: string = ''): Promise<any[]> {
     throw new AppError(`DB query failed on ${table}`, 500);
   }
   const data = await res.json();
-  return Array.isArray(data) ? data : [data];
+  return Array.isArray(data) ? data : (data ? [data] : []);
 }
 
-async function sbGetOne(table: string, params: string = ''): Promise<any | null> {
+async function sbGetOne(table: string, params: string = ''): Promise<any> {
   const rows = await sbGet(table, params);
   return rows[0] ?? null;
 }
@@ -53,10 +54,10 @@ async function sbInsert(table: string, body: object | object[]): Promise<any> {
     throw new AppError(`DB insert failed on ${table}: ${err}`, 500);
   }
   const data = await res.json();
-  return Array.isArray(data) ? data[0] : data;
+  return Array.isArray(data) ? (data.length > 0 ? data[0] : data) : data;
 }
 
-async function sbUpsert(table: string, body: object | object[], onConflict: string): Promise<any[]> {
+async function sbUpsert(table: string, body: object | object[], onConflict: string): Promise<any> {
   const url = `${SUPABASE_URL}/rest/v1/${table}?on_conflict=${onConflict}`;
   const res = await fetch(url, {
     method: 'POST',
@@ -68,7 +69,8 @@ async function sbUpsert(table: string, body: object | object[], onConflict: stri
     console.error(`❌ sbUpsert ${table} → ${res.status}:`, err);
     throw new AppError(`DB upsert failed on ${table}`, 500);
   }
-  return res.json();
+  const data = await res.json();
+  return Array.isArray(data) ? data : [];
 }
 
 async function sbUpdate(table: string, params: string, body: object): Promise<any> {
@@ -84,7 +86,7 @@ async function sbUpdate(table: string, params: string, body: object): Promise<an
     throw new AppError(`DB update failed on ${table}`, 500);
   }
   const data = await res.json();
-  return Array.isArray(data) ? data[0] : data;
+  return Array.isArray(data) ? (data.length > 0 ? data[0] : data) : data;
 }
 
 async function sbDelete(table: string, params: string): Promise<void> {
@@ -104,12 +106,17 @@ function extractFirstItem(data: any): any {
 }
 
 async function getTeacherId(profileId: string): Promise<string> {
-  const teacher = await sbGetOne('teachers', `profile_id=eq.${profileId}&select=id`);
-  if (!teacher) throw new AppError('Teacher not found', 404);
+  let teacher = await sbGetOne('teachers', `profile_id=eq.${profileId}&select=id`);
+  if (!teacher) {
+    teacher = await sbInsert('teachers', { profile_id: profileId });
+  }
   return teacher.id;
 }
 
-// GET /api/v1/teacher/classes
+// =============================================================================
+// CLASSES & STUDENTS
+// =============================================================================
+
 router.get('/classes', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
@@ -135,7 +142,6 @@ router.get('/classes', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// GET /api/v1/teacher/students/:classId
 router.get('/students/:classId', async (req, res, next) => {
   try {
     const { classId } = req.params;
@@ -153,7 +159,10 @@ router.get('/students/:classId', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// GET /api/v1/teacher/schedule
+// =============================================================================
+// EMPLOI DU TEMPS
+// =============================================================================
+
 router.get('/schedule', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
@@ -170,7 +179,10 @@ router.get('/schedule', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// GET /api/v1/teacher/stats
+// =============================================================================
+// STATISTIQUES
+// =============================================================================
+
 router.get('/stats', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
@@ -187,7 +199,10 @@ router.get('/stats', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// GET /api/v1/teacher/grades
+// =============================================================================
+// NOTES (GRADES)
+// =============================================================================
+
 router.get('/grades', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
@@ -206,7 +221,6 @@ router.get('/grades', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// POST /api/v1/teacher/grades
 router.post('/grades', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
@@ -229,7 +243,6 @@ router.post('/grades', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// PUT /api/v1/teacher/grades/:gradeId
 router.put('/grades/:gradeId', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
@@ -244,7 +257,6 @@ router.put('/grades/:gradeId', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// DELETE /api/v1/teacher/grades/:gradeId
 router.delete('/grades/:gradeId', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
@@ -254,14 +266,18 @@ router.delete('/grades/:gradeId', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// GET /api/v1/teacher/assignments
+// =============================================================================
+// DEVOIRS (ASSIGNMENTS)
+// =============================================================================
+
 router.get('/assignments', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
-    const { classId, subjectId } = req.query;
+    const { classId, subjectId, type } = req.query;
     let params = `teacher_id=eq.${teacherId}&select=*,subjects:subject_id(name),classes:class_id(name)&order=due_date`;
     if (classId)   params += `&class_id=eq.${classId}`;
     if (subjectId) params += `&subject_id=eq.${subjectId}`;
+    if (type)      params += `&type=eq.${type}`;
     const data = await sbGet('assignments', params);
     const formatted = data.map((a: any) => ({
       ...a,
@@ -272,24 +288,27 @@ router.get('/assignments', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// POST /api/v1/teacher/assignments
 router.post('/assignments', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
-    const { classId, subjectId, title, description, dueDate, type, maxScore } = req.body;
-    if (!classId || !subjectId || !title || !dueDate) {
-      throw new AppError('classId, subjectId, title et dueDate sont requis', 400);
+    const { classId, subjectId, title, description, dueDate, type, fileData, fileName } = req.body;
+    if (!classId || !subjectId || !title) {
+      throw new AppError('classId, subjectId et title sont requis', 400);
+    }
+    let fileUrl: string | null = null;
+    if (fileData && fileName) {
+      fileUrl = fileData;
     }
     const data = await sbInsert('assignments', {
       teacher_id: teacherId, class_id: classId, subject_id: subjectId, title,
-      description: description || null, due_date: dueDate, type: type || 'homework',
-      max_score: maxScore ? Number(maxScore) : null,
+      description: description || null, due_date: dueDate || null,
+      type: type || 'homework', file_url: fileUrl, file_name: fileName || null,
     });
     const studentProfileIds = await getClassStudentProfileIds(classId);
     if (studentProfileIds.length > 0) {
       await createBulkNotifications(studentProfileIds, {
         type: 'assignment', title: `Nouveau devoir : ${title}`,
-        body: `À rendre pour le ${new Date(dueDate).toLocaleDateString('fr-FR')}`,
+        body: dueDate ? `À rendre pour le ${new Date(dueDate).toLocaleDateString('fr-FR')}` : 'Nouveau devoir disponible',
         data: { assignmentId: data.id },
       });
     }
@@ -297,21 +316,6 @@ router.post('/assignments', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// PUT /api/v1/teacher/assignments/:assignmentId
-router.put('/assignments/:assignmentId', async (req, res, next) => {
-  try {
-    const teacherId = await getTeacherId(req.user!.id);
-    const { assignmentId } = req.params;
-    const { title, description, dueDate, type, maxScore } = req.body;
-    const updateBody: any = { title, description, due_date: dueDate, type };
-    if (maxScore !== undefined) updateBody.max_score = Number(maxScore);
-    const data = await sbUpdate('assignments', `id=eq.${assignmentId}&teacher_id=eq.${teacherId}`, updateBody);
-    if (!data) throw new AppError('Assignment not found or not authorized', 404);
-    res.json(successResponse(data, 'Devoir modifié'));
-  } catch (err) { next(err); }
-});
-
-// DELETE /api/v1/teacher/assignments/:assignmentId
 router.delete('/assignments/:assignmentId', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
@@ -321,7 +325,6 @@ router.delete('/assignments/:assignmentId', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// GET /api/v1/teacher/assignments/:assignmentId/submissions
 router.get('/assignments/:assignmentId/submissions', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
@@ -337,7 +340,6 @@ router.get('/assignments/:assignmentId/submissions', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// PATCH /api/v1/teacher/submissions/:submissionId/grade
 router.patch('/submissions/:submissionId/grade', async (req, res, next) => {
   try {
     const { submissionId } = req.params;
@@ -349,23 +351,10 @@ router.patch('/submissions/:submissionId/grade', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// GET /api/v1/teacher/attendance
-router.get('/attendance', async (req, res, next) => {
-  try {
-    const teacherId = await getTeacherId(req.user!.id);
-    const { classId, date, startDate, endDate } = req.query;
-    let params = `teacher_id=eq.${teacherId}&select=*,students:student_id(id,student_number,profiles:profile_id(first_name,last_name))&order=date.desc`;
-    if (classId)   params += `&class_id=eq.${classId}`;
-    if (date)      params += `&date=eq.${date}`;
-    if (startDate) params += `&date=gte.${startDate}`;
-    if (endDate)   params += `&date=lte.${endDate}`;
-    const data = await sbGet('attendance', params);
-    const formatted = data.map((a: any) => ({ ...a, student: extractFirstItem(a.students) }));
-    res.json(successResponse(formatted));
-  } catch (err) { next(err); }
-});
+// =============================================================================
+// PRÉSENCES (ATTENDANCE)
+// =============================================================================
 
-// POST /api/v1/teacher/attendance
 router.post('/attendance', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
@@ -397,25 +386,27 @@ router.post('/attendance', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// GET /api/v1/teacher/announcements
+// =============================================================================
+// ANNONCES (ANNOUNCEMENTS)
+// =============================================================================
+
 router.get('/announcements', async (req, res, next) => {
   try {
     const { classId } = req.query;
-    let params = `select=*&order=created_at.desc`;
+    let params = `author_id=eq.${req.user!.id}&select=*,classes:class_id(name)&order=published_at.desc`;
     if (classId) params += `&class_id=eq.${classId}`;
     const data = await sbGet('announcements', params);
     res.json(successResponse(data));
   } catch (err) { next(err); }
 });
 
-// POST /api/v1/teacher/announcements
 router.post('/announcements', async (req, res, next) => {
   try {
-    const { title, content, classId, targetRole } = req.body;
+    const { title, content, classId } = req.body;
     if (!title || !content) throw new AppError('title et content sont requis', 400);
     const data = await sbInsert('announcements', {
       author_id: req.user!.id, title, content,
-      class_id: classId || null, target_role: targetRole || null,
+      class_id: classId || null, published_at: new Date().toISOString(),
     });
     if (classId) {
       const studentProfileIds = await getClassStudentProfileIds(classId);
@@ -430,7 +421,6 @@ router.post('/announcements', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// DELETE /api/v1/teacher/announcements/:announcementId
 router.delete('/announcements/:announcementId', async (req, res, next) => {
   try {
     const { announcementId } = req.params;
@@ -439,19 +429,35 @@ router.delete('/announcements/:announcementId', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// GET /api/v1/teacher/messages/conversations
+// =============================================================================
+// MESSAGERIE
+// =============================================================================
+
 router.get('/messages/conversations', async (req, res, next) => {
   try {
     const myId = req.user!.id;
     const data = await sbGet(
       'messages',
-      `or=(sender_id.eq.${myId},receiver_id.eq.${myId})&select=id,sender_id,receiver_id,content,created_at,is_read,sender:sender_id(first_name,last_name,avatar_url),receiver:receiver_id(first_name,last_name,avatar_url)&order=created_at.desc`
+      `or=(sender_id.eq.${myId},receiver_id.eq.${myId})&select=id,sender_id,receiver_id,content,created_at,is_read&order=created_at.desc`
     );
-    res.json(successResponse(data));
+    // Get unique conversations by partner
+    const conversationsMap = new Map();
+    for (const msg of data) {
+      const partnerId = msg.sender_id === myId ? msg.receiver_id : msg.sender_id;
+      if (!conversationsMap.has(partnerId)) {
+        const partner = await sbGetOne('profiles', `id=eq.${partnerId}&select=first_name,last_name`);
+        conversationsMap.set(partnerId, {
+          partnerId,
+          otherName: partner ? `${partner.first_name} ${partner.last_name || ''}`.trim() : 'Utilisateur',
+          content: msg.content,
+          created_at: msg.created_at,
+        });
+      }
+    }
+    res.json(successResponse(Array.from(conversationsMap.values())));
   } catch (err) { next(err); }
 });
 
-// GET /api/v1/teacher/messages/:userId
 router.get('/messages/:userId', async (req, res, next) => {
   try {
     const { userId } = req.params;
@@ -460,13 +466,11 @@ router.get('/messages/:userId', async (req, res, next) => {
       'messages',
       `or=(and(sender_id.eq.${myId},receiver_id.eq.${userId}),and(sender_id.eq.${userId},receiver_id.eq.${myId}))&select=*&order=created_at`
     );
-    await sbUpdate('messages', `receiver_id=eq.${myId}&sender_id=eq.${userId}&is_read=eq.false`, { is_read: true })
-      .catch(() => {});
+    await sbUpdate('messages', `receiver_id=eq.${myId}&sender_id=eq.${userId}&is_read=eq.false`, { is_read: true }).catch(() => {});
     res.json(successResponse(data));
   } catch (err) { next(err); }
 });
 
-// POST /api/v1/teacher/messages
 router.post('/messages', async (req, res, next) => {
   try {
     const { receiverId, content } = req.body;
@@ -476,14 +480,18 @@ router.post('/messages', async (req, res, next) => {
     });
     await createNotification({
       recipientId: receiverId, type: 'message',
-      title: `Message de ${req.user!.firstName || ''} ${req.user!.lastName || ''}`.trim(),
-      body: content.substring(0, 100), data: { messageId: data.id, senderId: req.user!.id },
+      title: `Nouveau message`,
+      body: content.substring(0, 100),
+      data: { messageId: data.id, senderId: req.user!.id },
     });
     res.status(201).json(successResponse(data, 'Message envoyé'));
   } catch (err) { next(err); }
 });
 
-// GET /api/v1/teacher/profile
+// =============================================================================
+// PROFIL ENSEIGNANT
+// =============================================================================
+
 router.get('/profile', async (req, res, next) => {
   try {
     const profile = await sbGetOne('profiles', `id=eq.${req.user!.id}&select=*`);
@@ -493,7 +501,6 @@ router.get('/profile', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// PATCH /api/v1/teacher/profile
 router.patch('/profile', async (req, res, next) => {
   try {
     const { firstName, lastName, phone, address, gender, avatarUrl } = req.body;

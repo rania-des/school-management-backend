@@ -10,7 +10,7 @@ function sbHeaders() {
   };
 }
 
-async function sbGet(table: string, params: string = ''): Promise<any[]> {
+async function sbGet(table: string, params: string = ''): Promise<any> {
   const url = `${SUPABASE_URL}/rest/v1/${table}${params ? '?' + params : ''}`;
   const res = await fetch(url, { headers: sbHeaders() });
   if (!res.ok) return [];

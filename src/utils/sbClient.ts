@@ -16,7 +16,7 @@ export function sbHeaders(extra?: Record<string, string>) {
   };
 }
 
-export async function sbGet(table: string, params = ''): Promise<any[]> {
+export async function sbGet(table: string, params = ''): Promise<any> {
   const url = `${SUPABASE_URL}/rest/v1/${table}${params ? '?' + params : ''}`;
   const res = await fetch(url, { headers: sbHeaders() });
   if (!res.ok) {
@@ -25,10 +25,10 @@ export async function sbGet(table: string, params = ''): Promise<any[]> {
     throw new Error(`DB query failed on ${table}: ${err}`);
   }
   const data = await res.json();
-  return Array.isArray(data) ? data : [data];
+  return Array.isArray(data) ? data : (data ? [data] : []);
 }
 
-export async function sbGetOne(table: string, params = ''): Promise<any | null> {
+export async function sbGetOne(table: string, params = ''): Promise<any> {
   const rows = await sbGet(table, params);
   return rows[0] ?? null;
 }
@@ -42,10 +42,10 @@ export async function sbInsert(table: string, body: object | object[]): Promise<
     throw new Error(`DB insert failed on ${table}: ${err}`);
   }
   const data = await res.json();
-  return Array.isArray(data) ? data[0] : data;
+  return Array.isArray(data) ? (data.length > 0 ? data[0] : data) : data;
 }
 
-export async function sbInsertMany(table: string, body: object[]): Promise<any[]> {
+export async function sbInsertMany(table: string, body: object[]): Promise<any> {
   const url = `${SUPABASE_URL}/rest/v1/${table}`;
   const res = await fetch(url, { method: 'POST', headers: sbHeaders(), body: JSON.stringify(body) });
   if (!res.ok) {
@@ -53,10 +53,11 @@ export async function sbInsertMany(table: string, body: object[]): Promise<any[]
     console.error(`❌ sbInsertMany ${table} → ${res.status}:`, err);
     throw new Error(`DB insert failed on ${table}: ${err}`);
   }
-  return res.json();
+  const data = await res.json();
+  return Array.isArray(data) ? data : [];
 }
 
-export async function sbUpsert(table: string, body: object | object[], onConflict: string): Promise<any[]> {
+export async function sbUpsert(table: string, body: object | object[], onConflict: string): Promise<any> {
   const url = `${SUPABASE_URL}/rest/v1/${table}?on_conflict=${onConflict}`;
   const res = await fetch(url, {
     method: 'POST',
@@ -68,7 +69,8 @@ export async function sbUpsert(table: string, body: object | object[], onConflic
     console.error(`❌ sbUpsert ${table} → ${res.status}:`, err);
     throw new Error(`DB upsert failed on ${table}: ${err}`);
   }
-  return res.json();
+  const data = await res.json();
+  return Array.isArray(data) ? data : [];
 }
 
 export async function sbUpdate(table: string, params: string, body: object): Promise<any> {
@@ -80,7 +82,7 @@ export async function sbUpdate(table: string, params: string, body: object): Pro
     throw new Error(`DB update failed on ${table}: ${err}`);
   }
   const data = await res.json();
-  return Array.isArray(data) ? data[0] : data;
+  return Array.isArray(data) ? (data.length > 0 ? data[0] : data) : data;
 }
 
 export async function sbDelete(table: string, params: string): Promise<void> {
