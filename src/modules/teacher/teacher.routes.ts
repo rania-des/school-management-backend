@@ -26,7 +26,7 @@ async function getTeacherId(profileId: string): Promise<string> {
     `${SUPABASE_URL}/rest/v1/teachers?profile_id=eq.${profileId}&select=id`,
     { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
   );
-  const data = await res.json();
+  const data = (await res.json()) as any[];
   if (!data?.[0]?.id) throw new AppError('Teacher not found', 404);
   return data[0].id;
 }
