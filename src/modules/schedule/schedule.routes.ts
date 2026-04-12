@@ -1,13 +1,43 @@
 import { Router } from 'express';
 import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
-import { supabaseAdmin } from '../../config/supabase';
 import { authenticate, authorize } from '../../middleware/auth.middleware';
 import { AppError } from '../../middleware/error.middleware';
 import { successResponse } from '../../utils/pagination';
 
 const router = Router();
 router.use(authenticate);
+
+const SUPABASE_URL = process.env.SUPABASE_URL!;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+const H = {
+  'apikey': SUPABASE_KEY,
+  'Authorization': `Bearer ${SUPABASE_KEY}`,
+  'Content-Type': 'application/json',
+};
+
+async function sbGet(path: string) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { headers: H });
+  return { data: await res.json(), ok: res.ok };
+}
+async function sbPost(path: string, body: any) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    method: 'POST',
+    headers: { ...H, 'Prefer': 'return=representation' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json() as any[];
+  return { data: Array.isArray(data) ? data[0] : data, ok: res.ok };
+}
+async function sbPatch(path: string, body: any) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    method: 'PATCH',
+    headers: { ...H, 'Prefer': 'return=representation' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json() as any[];
+  return { data: Array.isArray(data) ? data[0] : data, ok: res.ok };
+}
 
 const slotSchema = z.object({
   classId: z.string().uuid(),
@@ -28,44 +58,35 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
 
     if (!classId) {
       if (req.user!.role === 'student') {
-        const { data } = await supabaseAdmin
-          .from('students').select('class_id').eq('profile_id', req.user!.id).single();
-        classId = data?.class_id;
+        const { data: students } = await sbGet(`students?profile_id=eq.${req.user!.id}&select=class_id`);
+        classId = Array.isArray(students) && students[0]?.class_id;
       } else if (req.user!.role === 'parent') {
-        const { data: parent } = await supabaseAdmin
-          .from('parents').select('id').eq('profile_id', req.user!.id).single();
-        const { data: children } = await supabaseAdmin
-          .from('parent_student')
-          .select('students(class_id)')
-          .eq('parent_id', parent?.id)
-          .limit(1)
-          .single();
-        classId = (children as any)?.students?.class_id;
+        const { data: parents } = await sbGet(`parents?profile_id=eq.${req.user!.id}&select=id`);
+        const parentId = Array.isArray(parents) && parents[0]?.id;
+        const { data: children } = await sbGet(`parent_student?parent_id=eq.${parentId}&select=student_id&limit=1`);
+        const studentId = Array.isArray(children) && children[0]?.student_id;
+        if (studentId) {
+          const { data: student } = await sbGet(`students?id=eq.${studentId}&select=class_id`);
+          classId = Array.isArray(student) && student[0]?.class_id;
+        }
       }
     }
 
     if (!classId) throw new AppError('classId is required', 400);
 
-    let query = supabaseAdmin
-      .from('schedule_slots')
-      .select(`*, subjects(name, code, color), teachers(users(first_name, last_name)), classes(name)`)
-      .eq('class_id', classId)
-      .eq('is_active', true)
-      .order('day_of_week')
-      .order('start_time');
+    let url = `schedule_slots?select=*&class_id=eq.${classId}&is_active=eq.true&order=day_of_week,start_time`;
+    if (academicYearId) url += `&academic_year_id=eq.${academicYearId}`;
 
-    if (academicYearId) query = query.eq('academic_year_id', academicYearId);
-
-    const { data, error } = await query;
-    if (error) throw new AppError('Failed to fetch schedule', 500);
+    const { data } = await sbGet(url);
+    const arr = Array.isArray(data) ? data : [];
 
     const grouped: Record<string, unknown[]> = {};
-    (data || []).forEach((slot: any) => {
+    arr.forEach((slot: any) => {
       if (!grouped[slot.day_of_week]) grouped[slot.day_of_week] = [];
       grouped[slot.day_of_week].push(slot);
     });
 
-    return res.json(successResponse({ schedule: grouped, slots: data }));
+    return res.json(successResponse({ schedule: grouped, slots: arr }));
   } catch (err) {
     return next(err);
   }
@@ -75,32 +96,23 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
 router.get('/teacher', authorize('teacher', 'admin'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { academicYearId } = req.query;
-
     let teacherId: string;
+
     if (req.user!.role === 'teacher') {
-      const { data } = await supabaseAdmin
-        .from('teachers').select('id').eq('profile_id', req.user!.id).single();
-      if (!data) throw new AppError('Teacher not found', 404);
-      teacherId = data.id;
+      const { data: teachers } = await sbGet(`teachers?profile_id=eq.${req.user!.id}&select=id`);
+      const t = Array.isArray(teachers) && teachers[0];
+      if (!t) throw new AppError('Teacher not found', 404);
+      teacherId = t.id;
     } else {
       teacherId = req.query.teacherId as string;
       if (!teacherId) throw new AppError('teacherId required', 400);
     }
 
-    let query = supabaseAdmin
-      .from('schedule_slots')
-      .select('*, subjects(name, color), classes(name)')
-      .eq('teacher_id', teacherId)
-      .eq('is_active', true)
-      .order('day_of_week')
-      .order('start_time');
+    let url = `schedule_slots?select=*&teacher_id=eq.${teacherId}&is_active=eq.true&order=day_of_week,start_time`;
+    if (academicYearId) url += `&academic_year_id=eq.${academicYearId}`;
 
-    if (academicYearId) query = query.eq('academic_year_id', academicYearId);
-
-    const { data, error } = await query;
-    if (error) throw new AppError('Failed to fetch teacher schedule', 500);
-
-    return res.json(successResponse(data));
+    const { data } = await sbGet(url);
+    return res.json(successResponse(Array.isArray(data) ? data : []));
   } catch (err) {
     return next(err);
   }
@@ -111,50 +123,38 @@ router.post('/', authorize('admin'), async (req: Request, res: Response, next: N
   try {
     const body = slotSchema.parse(req.body);
 
-    // Résoudre teachers.id depuis profile_id si nécessaire
+    // Résoudre teacher_id
     let finalTeacherId: string | null = null;
     if (body.teacherId) {
-      const { data: teacherDirect } = await supabaseAdmin
-        .from('teachers').select('id').eq('id', body.teacherId).maybeSingle();
-      if (teacherDirect) {
-        finalTeacherId = teacherDirect.id;
+      const { data: td } = await sbGet(`teachers?id=eq.${body.teacherId}&select=id`);
+      if (Array.isArray(td) && td[0]) {
+        finalTeacherId = td[0].id;
       } else {
-        const { data: teacherByProfile } = await supabaseAdmin
-          .from('teachers').select('id').eq('profile_id', body.teacherId).maybeSingle();
-        if (teacherByProfile) finalTeacherId = teacherByProfile.id;
+        const { data: tp } = await sbGet(`teachers?profile_id=eq.${body.teacherId}&select=id`);
+        if (Array.isArray(tp) && tp[0]) finalTeacherId = tp[0].id;
       }
     }
 
     // Conflict check
-    const { data: existing } = await supabaseAdmin
-      .from('schedule_slots')
-      .select('id')
-      .eq('class_id', body.classId)
-      .eq('day_of_week', body.dayOfWeek)
-      .eq('is_active', true)
-      .lt('start_time', body.endTime)
-      .gt('end_time', body.startTime);
-
-    if (existing && existing.length > 0) {
+    const { data: existing } = await sbGet(
+      `schedule_slots?class_id=eq.${body.classId}&day_of_week=eq.${body.dayOfWeek}&is_active=eq.true&start_time=lt.${body.endTime}&end_time=gt.${body.startTime}&select=id`
+    );
+    if (Array.isArray(existing) && existing.length > 0) {
       throw new AppError('Schedule conflict detected for this class', 409);
     }
 
-    const { data, error } = await supabaseAdmin
-      .from('schedule_slots')
-      .insert({
-        class_id: body.classId,
-        subject_id: body.subjectId,
-        teacher_id: finalTeacherId,
-        academic_year_id: body.academicYearId,
-        day_of_week: body.dayOfWeek,
-        start_time: body.startTime,
-        end_time: body.endTime,
-        room: body.room || null,
-      })
-      .select()
-      .single();
+    const { data, ok } = await sbPost('schedule_slots', {
+      class_id: body.classId,
+      subject_id: body.subjectId,
+      teacher_id: finalTeacherId,
+      academic_year_id: body.academicYearId,
+      day_of_week: body.dayOfWeek,
+      start_time: body.startTime,
+      end_time: body.endTime,
+      room: body.room || null,
+    });
 
-    if (error) throw new AppError(`Failed to create schedule slot: ${error.message}`, 500);
+    if (!ok) throw new AppError('Failed to create schedule slot', 500);
     return res.status(201).json(successResponse(data));
   } catch (err) {
     return next(err);
@@ -164,7 +164,7 @@ router.post('/', authorize('admin'), async (req: Request, res: Response, next: N
 // DELETE /schedule/:id
 router.delete('/:id', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    await supabaseAdmin.from('schedule_slots').update({ is_active: false }).eq('id', req.params.id);
+    await sbPatch(`schedule_slots?id=eq.${req.params.id}`, { is_active: false });
     return res.status(204).send();
   } catch (err) {
     return next(err);
