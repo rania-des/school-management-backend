@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { authenticate, authorize } from '../../middleware/auth.middleware';import { Router } from 'express';
 import { authenticate, authorize } from '../../middleware/auth.middleware';
 import { AppError } from '../../middleware/error.middleware';
 import { successResponse } from '../../utils/pagination';
@@ -20,7 +21,6 @@ function extractFirstItem(data: any): any {
 
 // Helper pour récupérer l'ID teacher depuis le profile_id (clé hardcodée temporairement)
 async function getTeacherId(profileId: string): Promise<string> {
-  // Clés hardcodées temporairement pour contourner Railway
   const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
   const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
   
@@ -631,20 +631,20 @@ router.delete('/announcements/:announcementId', async (req, res, next) => {
 // MESSAGERIE
 // =============================================================================
 
-// GET /api/v1/teacher/messages/conversations
+// GET /api/v1/teacher/messages/conversations — VERSION CORRIGÉE (sans les joins)
 router.get('/messages/conversations', async (req, res, next) => {
   try {
     const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
-
+    
     const resData = await fetch(
-      `${SUPABASE_URL}/rest/v1/messages?or=(sender_id.eq.${req.user!.id},receiver_id.eq.${req.user!.id})&select=id,sender_id,receiver_id,content,created_at,is_read,sender:sender_id(first_name,last_name,avatar_url),receiver:receiver_id(first_name,last_name,avatar_url)&order=created_at.desc`,
+      `${SUPABASE_URL}/rest/v1/messages?or=(sender_id.eq.${req.user!.id},receiver_id.eq.${req.user!.id})&select=id,sender_id,receiver_id,content,created_at,is_read&order=created_at.desc`,
       { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
     );
     const data = (await resData.json()) as any[];
-
+    
     if (!resData.ok) throw new AppError('Failed to fetch conversations', 500);
-
+    
     res.json(successResponse(data || []));
   } catch (err) { next(err); }
 });
