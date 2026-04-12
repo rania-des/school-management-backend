@@ -1,45 +1,65 @@
-import { Router, Request, Response, NextFunction } from 'express';
+import { Router } from 'express';
+import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
+import { supabaseAdmin } from '../../config/supabase';
 import { authenticate, authorize } from '../../middleware/auth.middleware';
 import { AppError } from '../../middleware/error.middleware';
 import { successResponse, getPagination, paginate } from '../../utils/pagination';
-import { sbGet, sbGetOne, sbInsert, sbUpdate, sbDelete, sbUpsert } from '../../utils/sbClient';
 
 const router = Router();
 router.use(authenticate, authorize('admin'));
 
-// ── SECTIONS ──────────────────────────────────────────────────────────────────
+// ==================== SECTIONS ====================
+
 router.get('/sections', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const data = await sbGet('sections', 'select=*&order=name').catch(() => null);
-    if (!data) return res.json(successResponse([
-      { id: '1', name: 'Mathématiques', code: 'MATH' },
-      { id: '2', name: 'Sciences', code: 'SCI' },
-      { id: '3', name: 'Lettres', code: 'LET' },
-      { id: '4', name: 'Économie', code: 'ECO' },
-      { id: '5', name: 'Informatique', code: 'INFO' },
-      { id: '6', name: 'Technique', code: 'TECH' },
-    ]));
-    return res.json(successResponse(data));
-  } catch (err) { return next(err); }
+    const { data, error } = await supabaseAdmin
+      .from('sections')
+      .select('*')
+      .order('name');
+    if (error) {
+      // If sections table doesn't exist, return default sections
+      return res.json(successResponse([
+        { id: '1', name: 'Mathématiques', code: 'MATH' },
+        { id: '2', name: 'Sciences', code: 'SCI' },
+        { id: '3', name: 'Lettres', code: 'LET' },
+        { id: '4', name: 'Économie', code: 'ECO' },
+        { id: '5', name: 'Informatique', code: 'INFO' },
+        { id: '6', name: 'Technique', code: 'TECH' },
+      ]));
+    }
+    return res.json(successResponse(data || []));
+  } catch (err) {
+    return next(err);
+  }
 });
 
-// ── LEVELS ────────────────────────────────────────────────────────────────────
+// ==================== LEVELS ====================
+
 router.get('/levels', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const data = await sbGet('levels', 'select=*&order=order_index').catch(() => null);
-    if (!data) return res.json(successResponse([
-      { id: '1', name: '1ère année', order_index: 1 },
-      { id: '2', name: '2ème année', order_index: 2 },
-      { id: '3', name: '3ème année', order_index: 3 },
-      { id: '4', name: '4ème année', order_index: 4 },
-      { id: '5', name: 'Terminale', order_index: 5 },
-    ]));
-    return res.json(successResponse(data));
-  } catch (err) { return next(err); }
+    const { data, error } = await supabaseAdmin
+      .from('levels')
+      .select('*')
+      .order('order_index');
+    if (error) {
+      // If levels table doesn't exist, return default levels
+      return res.json(successResponse([
+        { id: '1', name: '1ère année', order_index: 1 },
+        { id: '2', name: '2ème année', order_index: 2 },
+        { id: '3', name: '3ème année', order_index: 3 },
+        { id: '4', name: '4ème année', order_index: 4 },
+        { id: '5', name: 'Terminale', order_index: 5 },
+      ]));
+    }
+    return res.json(successResponse(data || []));
+  } catch (err) {
+    return next(err);
+  }
 });
 
-// ── CLASSES ───────────────────────────────────────────────────────────────────
+// ==================== CLASSES ====================
+
 const classSchema = z.object({
   name: z.string().min(1).max(100),
   levelId: z.string().uuid().optional().nullable(),
@@ -53,31 +73,44 @@ router.get('/classes', async (req: Request, res: Response, next: NextFunction) =
   try {
     const { page, limit, offset } = getPagination(req);
     const { academicYearId, levelId } = req.query;
-    let params = `select=*,academic_years(name,is_current)&order=name&offset=${offset}&limit=${limit}`;
-    if (academicYearId) params += `&academic_year_id=eq.${academicYearId}`;
-    if (levelId) params += `&level_id=eq.${levelId}`;
-    const data = await sbGet('classes', params);
-    return res.json(paginate(data, data.length, { page, limit, offset }));
-  } catch (err) { return next(err); }
-});
 
-router.get('/classes/:id', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const cls = await sbGetOne('classes', `id=eq.${req.params.id}&select=*,students(id,student_number,profiles:profile_id(first_name,last_name,email))`);
-    if (!cls) throw new AppError('Class not found', 404);
-    return res.json(successResponse(cls));
-  } catch (err) { return next(err); }
+    let query = supabaseAdmin
+      .from('classes')
+      .select(`*, academic_years(name, is_current)`, { count: 'exact' })
+      .order('name')
+      .range(offset, offset + limit - 1);
+
+    if (academicYearId) query = query.eq('academic_year_id', academicYearId);
+    if (levelId) query = query.eq('level_id', levelId);
+
+    const { data, count, error } = await query;
+    if (error) throw new AppError('Failed to fetch classes', 500);
+    return res.json(paginate(data || [], count || 0, { page, limit, offset }));
+  } catch (err) {
+    return next(err);
+  }
 });
 
 router.post('/classes', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = classSchema.parse(req.body);
-    const data = await sbInsert('classes', {
-      name: body.name, level_id: body.levelId || null, section_id: body.sectionId || null,
-      academic_year_id: body.academicYearId, capacity: body.capacity, room: body.room || null,
-    });
+    const { data, error } = await supabaseAdmin
+      .from('classes')
+      .insert({
+        name: body.name,
+        level_id: body.levelId || null,
+        section_id: body.sectionId || null,
+        academic_year_id: body.academicYearId,
+        capacity: body.capacity,
+        room: body.room || null,
+      })
+      .select()
+      .single();
+    if (error) throw new AppError(`Failed to create class: ${error.message}`, 500);
     return res.status(201).json(successResponse(data));
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 });
 
 router.patch('/classes/:id', async (req: Request, res: Response, next: NextFunction) => {
@@ -89,20 +122,27 @@ router.patch('/classes/:id', async (req: Request, res: Response, next: NextFunct
     if (updates.room !== undefined) mapped.room = updates.room;
     if (updates.levelId !== undefined) mapped.level_id = updates.levelId;
     if (updates.sectionId !== undefined) mapped.section_id = updates.sectionId;
-    const data = await sbUpdate('classes', `id=eq.${req.params.id}`, mapped);
-    if (!data) throw new AppError('Class not found', 404);
+
+    const { data, error } = await supabaseAdmin
+      .from('classes').update(mapped).eq('id', req.params.id).select().single();
+    if (error || !data) throw new AppError('Class not found', 404);
     return res.json(successResponse(data));
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 });
 
 router.delete('/classes/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    await sbDelete('classes', `id=eq.${req.params.id}`);
+    await supabaseAdmin.from('classes').delete().eq('id', req.params.id);
     return res.status(204).send();
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 });
 
-// ── SUBJECTS ──────────────────────────────────────────────────────────────────
+// ==================== SUBJECTS ====================
+
 const subjectSchema = z.object({
   name: z.string().min(1).max(255),
   code: z.string().optional(),
@@ -115,209 +155,314 @@ const subjectSchema = z.object({
 router.get('/subjects', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { sectionId } = req.query;
-    let params = 'select=*&order=name';
-    if (sectionId) params += `&section_id=eq.${sectionId}`;
-    const data = await sbGet('subjects', params);
+    let query = supabaseAdmin.from('subjects').select('*').order('name');
+    if (sectionId) query = query.eq('section_id', sectionId);
+    const { data, error } = await query;
+    if (error) throw new AppError('Failed to fetch subjects', 500);
     return res.json(successResponse(data));
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 });
 
 router.post('/subjects', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = subjectSchema.parse(req.body);
-    const data = await sbInsert('subjects', {
-      name: body.name, code: body.code, coefficient: body.coefficient,
-      color: body.color, description: body.description, section_id: body.sectionId || null,
-    });
+    const { data, error } = await supabaseAdmin
+      .from('subjects')
+      .insert({
+        name: body.name,
+        code: body.code,
+        coefficient: body.coefficient,
+        color: body.color,
+        description: body.description,
+        section_id: body.sectionId || null,
+      })
+      .select()
+      .single();
+    if (error) throw new AppError('Failed to create subject', 500);
     return res.status(201).json(successResponse(data));
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 });
 
 router.patch('/subjects/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const updates = subjectSchema.partial().parse(req.body);
-    const mapped: any = {};
-    if (updates.name) mapped.name = updates.name;
-    if (updates.code !== undefined) mapped.code = updates.code;
-    if (updates.coefficient) mapped.coefficient = updates.coefficient;
-    if (updates.color) mapped.color = updates.color;
-    if (updates.description !== undefined) mapped.description = updates.description;
-    if (updates.sectionId !== undefined) mapped.section_id = updates.sectionId;
-    const data = await sbUpdate('subjects', `id=eq.${req.params.id}`, mapped);
-    if (!data) throw new AppError('Subject not found', 404);
+    const { data, error } = await supabaseAdmin
+      .from('subjects').update(updates).eq('id', req.params.id).select().single();
+    if (error || !data) throw new AppError('Subject not found', 404);
     return res.json(successResponse(data));
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 });
 
 router.delete('/subjects/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    await sbDelete('subjects', `id=eq.${req.params.id}`);
+    await supabaseAdmin.from('subjects').delete().eq('id', req.params.id);
     return res.status(204).send();
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 });
 
-// ── TEACHER ASSIGNMENTS ───────────────────────────────────────────────────────
+// ==================== TEACHER ASSIGNMENTS ====================
+
 router.get('/teacher-assignments', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { classId, teacherId, academicYearId } = req.query;
-    let params = 'select=*,teachers(profiles:profile_id(first_name,last_name)),subjects(name),classes(name)';
-    if (classId) params += `&class_id=eq.${classId}`;
-    if (teacherId) params += `&teacher_id=eq.${teacherId}`;
-    if (academicYearId) params += `&academic_year_id=eq.${academicYearId}`;
-    const data = await sbGet('teacher_assignments', params);
+    let query = supabaseAdmin
+      .from('teacher_assignments')
+      .select(`*, teachers(profiles(first_name, last_name)), subjects(name), classes(name)`);
+    if (classId) query = query.eq('class_id', classId);
+    if (teacherId) query = query.eq('teacher_id', teacherId);
+    if (academicYearId) query = query.eq('academic_year_id', academicYearId);
+
+    const { data, error } = await query;
+    if (error) throw new AppError('Failed to fetch assignments', 500);
     return res.json(successResponse(data));
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 });
 
 router.post('/teacher-assignments', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = z.object({
-      teacherId: z.string().uuid(), subjectId: z.string().uuid(),
-      classId: z.string().uuid(), academicYearId: z.string().uuid(),
+      teacherId: z.string().uuid(),
+      subjectId: z.string().uuid(),
+      classId: z.string().uuid(),
+      academicYearId: z.string().uuid(),
       isMainTeacher: z.boolean().default(false),
     }).parse(req.body);
-    const data = await sbInsert('teacher_assignments', {
-      teacher_id: body.teacherId, subject_id: body.subjectId, class_id: body.classId,
-      academic_year_id: body.academicYearId, is_main_teacher: body.isMainTeacher,
-    });
+
+    const { data, error } = await supabaseAdmin
+      .from('teacher_assignments')
+      .insert({
+        teacher_id: body.teacherId,
+        subject_id: body.subjectId,
+        class_id: body.classId,
+        academic_year_id: body.academicYearId,
+        is_main_teacher: body.isMainTeacher,
+      })
+      .select()
+      .single();
+
+    if (error) throw new AppError('Failed to assign teacher', 500);
     return res.status(201).json(successResponse(data));
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 });
 
 router.delete('/teacher-assignments/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    await sbDelete('teacher_assignments', `id=eq.${req.params.id}`);
+    await supabaseAdmin.from('teacher_assignments').delete().eq('id', req.params.id);
     return res.status(204).send();
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 });
 
-// ── PARENT-STUDENT LINKS ──────────────────────────────────────────────────────
+// ==================== PARENT-STUDENT LINKS ====================
 router.post('/parent-student', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = z.object({
-      parentId: z.string().uuid(), studentId: z.string().uuid(),
-      relationship: z.string().default('parent'), isPrimary: z.boolean().default(false),
+      parentId: z.string().uuid(),
+      studentId: z.string().uuid(),
+      relationship: z.string().default('parent'),
+      isPrimary: z.boolean().default(false),
     }).parse(req.body);
 
-    // Resolve parent id (could be profile_id or parents.id)
+    // Résoudre parents.id depuis profile_id
     let finalParentId = body.parentId;
-    const byId = await sbGetOne('parents', `id=eq.${body.parentId}&select=id`).catch(() => null);
-    if (!byId) {
-      const byProfile = await sbGetOne('parents', `profile_id=eq.${body.parentId}&select=id`);
-      if (!byProfile) throw new AppError(`Parent not found for id: ${body.parentId}`, 404);
-      finalParentId = byProfile.id;
+    const { data: parentDirect } = await supabaseAdmin
+      .from('parents').select('id').eq('id', body.parentId).maybeSingle();
+    if (!parentDirect) {
+      const { data: parentByProfile } = await supabaseAdmin
+        .from('parents').select('id').eq('profile_id', body.parentId).maybeSingle();
+      if (parentByProfile) finalParentId = parentByProfile.id;
+      else throw new AppError(`Parent not found for id: ${body.parentId}`, 404);
     }
 
-    // Resolve student id
+    // Résoudre students.id depuis profile_id
     let finalStudentId = body.studentId;
-    const sById = await sbGetOne('students', `id=eq.${body.studentId}&select=id`).catch(() => null);
-    if (!sById) {
-      const sByProfile = await sbGetOne('students', `profile_id=eq.${body.studentId}&select=id`);
-      if (!sByProfile) throw new AppError(`Student not found for id: ${body.studentId}`, 404);
-      finalStudentId = sByProfile.id;
+    const { data: studentDirect } = await supabaseAdmin
+      .from('students').select('id').eq('id', body.studentId).maybeSingle();
+    if (!studentDirect) {
+      const { data: studentByProfile } = await supabaseAdmin
+        .from('students').select('id').eq('profile_id', body.studentId).maybeSingle();
+      if (studentByProfile) finalStudentId = studentByProfile.id;
+      else throw new AppError(`Student not found for id: ${body.studentId}`, 404);
     }
 
-    const data = await sbInsert('parent_student', {
-      parent_id: finalParentId, student_id: finalStudentId,
-      relationship: body.relationship, is_primary: body.isPrimary,
-    });
+    const { data, error } = await supabaseAdmin
+      .from('parent_student')
+      .insert({
+        parent_id: finalParentId,
+        student_id: finalStudentId,
+        relationship: body.relationship,
+        is_primary: body.isPrimary,
+      })
+      .select()
+      .single();
+
+    if (error) throw new AppError(`Failed to link: ${error.message}`, 500);
     return res.status(201).json(successResponse(data));
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 });
 
-// ── ACADEMIC YEARS ────────────────────────────────────────────────────────────
+// ==================== ACADEMIC YEARS ====================
+
 router.get('/academic-years', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const data = await sbGet('academic_years', 'select=*&order=start_date.desc');
+    const { data, error } = await supabaseAdmin
+      .from('academic_years').select('*').order('start_date', { ascending: false });
+    if (error) throw new AppError('Failed to fetch years', 500);
     return res.json(successResponse(data));
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 });
 
 router.post('/academic-years', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = z.object({
-      name: z.string(), startDate: z.string(), endDate: z.string(), isCurrent: z.boolean().default(false),
+      name: z.string(),
+      startDate: z.string(),
+      endDate: z.string(),
+      isCurrent: z.boolean().default(false),
     }).parse(req.body);
+
     if (body.isCurrent) {
-      await sbUpdate('academic_years', 'is_current=eq.true', { is_current: false }).catch(() => {});
+      await supabaseAdmin.from('academic_years').update({ is_current: false }).eq('is_current', true);
     }
-    const data = await sbInsert('academic_years', {
-      name: body.name, start_date: body.startDate, end_date: body.endDate, is_current: body.isCurrent,
-    });
+
+    const { data, error } = await supabaseAdmin
+      .from('academic_years')
+      .insert({ name: body.name, start_date: body.startDate, end_date: body.endDate, is_current: body.isCurrent })
+      .select()
+      .single();
+
+    if (error) throw new AppError('Failed to create academic year', 500);
     return res.status(201).json(successResponse(data));
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 });
 
 router.patch('/academic-years/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = z.object({
-      name: z.string().optional(), startDate: z.string().optional(),
-      endDate: z.string().optional(), isCurrent: z.boolean().optional(),
+      name: z.string().optional(),
+      startDate: z.string().optional(),
+      endDate: z.string().optional(),
+      isCurrent: z.boolean().optional(),
     }).parse(req.body);
+
     if (body.isCurrent) {
-      await sbUpdate('academic_years', 'is_current=eq.true', { is_current: false }).catch(() => {});
+      await supabaseAdmin.from('academic_years').update({ is_current: false }).eq('is_current', true);
     }
+
     const mapped: any = {};
     if (body.name) mapped.name = body.name;
     if (body.startDate) mapped.start_date = body.startDate;
     if (body.endDate) mapped.end_date = body.endDate;
     if (body.isCurrent !== undefined) mapped.is_current = body.isCurrent;
-    const data = await sbUpdate('academic_years', `id=eq.${req.params.id}`, mapped);
-    if (!data) throw new AppError('Academic year not found', 404);
+
+    const { data, error } = await supabaseAdmin
+      .from('academic_years').update(mapped).eq('id', req.params.id).select().single();
+    if (error || !data) throw new AppError('Academic year not found', 404);
     return res.json(successResponse(data));
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 });
 
 router.delete('/academic-years/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    await sbDelete('academic_years', `id=eq.${req.params.id}`);
+    await supabaseAdmin.from('academic_years').delete().eq('id', req.params.id);
     return res.status(204).send();
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 });
 
-// ── USERS (admin view) ────────────────────────────────────────────────────────
+// ==================== USERS (admin view) ====================
+
 router.get('/users', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { role, search } = req.query;
     const { page, limit, offset } = getPagination(req);
-    let params = `select=*&order=created_at.desc&offset=${offset}&limit=${limit}`;
-    if (role) params += `&role=eq.${role}`;
-    if (search) params += `&or=(first_name.ilike.*${search}*,last_name.ilike.*${search}*,email.ilike.*${search}*)`;
-    const data = await sbGet('profiles', params);
-    return res.json(paginate(data, data.length, { page, limit, offset }));
-  } catch (err) { return next(err); }
+
+    let query = supabaseAdmin
+      .from('profiles')
+      .select('*', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1);
+
+    if (role) query = query.eq('role', role);
+    if (search) query = query.or(`first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%`);
+
+    const { data, count, error } = await query;
+    if (error) throw new AppError('Failed to fetch users', 500);
+    return res.json(paginate(data || [], count || 0, { page, limit, offset }));
+  } catch (err) {
+    return next(err);
+  }
 });
 
-// ── ESTABLISHMENT ─────────────────────────────────────────────────────────────
+// ==================== ESTABLISHMENT ====================
+
 router.get('/establishment', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const data = await sbGetOne('establishments', 'select=*&limit=1');
+    const { data } = await supabaseAdmin.from('establishments').select('*').limit(1).single();
     return res.json(successResponse(data));
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 });
 
 router.patch('/establishment', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = z.object({
-      name: z.string().optional(), address: z.string().optional(),
-      phone: z.string().optional(), email: z.string().email().optional(),
+      name: z.string().optional(),
+      address: z.string().optional(),
+      phone: z.string().optional(),
+      email: z.string().email().optional(),
       website: z.string().optional(),
     }).parse(req.body);
-    const existing = await sbGetOne('establishments', 'select=id&limit=1');
-    if (!existing) throw new AppError('Establishment not found', 404);
-    const data = await sbUpdate('establishments', `id=eq.${existing.id}`, body);
+
+    const { data: existing } = await supabaseAdmin.from('establishments').select('id').limit(1).single();
+    const { data, error } = await supabaseAdmin
+      .from('establishments').update(body).eq('id', existing?.id).select().single();
+    if (error) throw new AppError('Failed to update establishment', 500);
     return res.json(successResponse(data));
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 });
 
-// ── STUDENT ENROLLMENT ────────────────────────────────────────────────────────
+// ==================== STUDENT ENROLLMENT ====================
+
 router.patch('/students/:studentId/enroll', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { classId } = z.object({ classId: z.string().uuid() }).parse(req.body);
-    const data = await sbUpdate('students', `id=eq.${req.params.studentId}`, { class_id: classId });
-    if (!data) throw new AppError('Student not found', 404);
+    const { data, error } = await supabaseAdmin
+      .from('students')
+      .update({ class_id: classId })
+      .eq('id', req.params.studentId)
+      .select()
+      .single();
+    if (error || !data) throw new AppError('Student not found', 404);
     return res.json(successResponse(data, 'Student enrolled in class'));
-  } catch (err) { return next(err); }
+  } catch (err) {
+    return next(err);
+  }
 });
 
 export default router;

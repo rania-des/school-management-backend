@@ -1,14 +1,16 @@
-import { Router, Request, Response, NextFunction } from 'express';
+import { Router } from 'express';
+import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
-import multer from 'multer';
+import { supabaseAdmin } from '../../config/supabase';
 import { authenticate, authorize } from '../../middleware/auth.middleware';
 import { AppError } from '../../middleware/error.middleware';
 import { uploadFile, STORAGE_BUCKETS } from '../../utils/storage';
+import multer from 'multer';
 import { getPagination, paginate, successResponse } from '../../utils/pagination';
-import { sbGet, sbGetOne, sbUpdate, sbDelete } from '../../utils/sbClient';
 
 const router = Router();
 router.use(authenticate);
+
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 const updateProfileSchema = z.object({
@@ -21,16 +23,76 @@ const updateProfileSchema = z.object({
   specialization: z.string().optional(),
 });
 
-// GET /users/me/profile
+async function getRoleId(profileId: string, role: string): Promise<string | null> {
+  if (role === 'student') {
+    const { data } = await supabaseAdmin.from('students').select('id').eq('profile_id', profileId).maybeSingle();
+    return data?.id || null;
+  } else if (role === 'teacher') {
+    const { data } = await supabaseAdmin.from('teachers').select('id').eq('profile_id', profileId).maybeSingle();
+    return data?.id || null;
+  } else if (role === 'parent') {
+    const { data } = await supabaseAdmin.from('parents').select('id').eq('profile_id', profileId).maybeSingle();
+    return data?.id || null;
+  }
+  return null;
+}
+
+async function getRoleData(profileId: string, role: string): Promise<any> {
+  if (role === 'student') {
+    const { data, error } = await supabaseAdmin
+      .from('students')
+      .select(`
+        *,
+        classes(name, academic_years(name)),
+        parent_student(
+          id, is_primary, relationship,
+          parents(
+            id, profile_id,
+            users(first_name, last_name, phone)
+          )
+        )
+      `)
+      .eq('profile_id', profileId)
+      .maybeSingle();
+    if (error) console.error('getRoleData student error:', error.message);
+    return data;
+  } else if (role === 'teacher') {
+    const { data } = await supabaseAdmin
+      .from('teachers')
+      .select('*')
+      .eq('profile_id', profileId)
+      .maybeSingle();
+    return data;
+  } else if (role === 'parent') {
+    const { data } = await supabaseAdmin
+      .from('parents')
+      .select(`
+        *,
+        parent_student(
+          id, is_primary,
+          students(
+            id, student_number,
+            users(first_name, last_name),
+            classes(name)
+          )
+        )
+      `)
+      .eq('profile_id', profileId)
+      .maybeSingle();
+    return data;
+  }
+  return null;
+}
+
 router.get('/me/profile', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const data = await sbGetOne('profiles', `id=eq.${req.user!.id}&select=*`);
-    if (!data) throw new AppError('Profile not found', 404);
+    const { data, error } = await supabaseAdmin
+      .from('users').select('*').eq('id', req.user!.id).single();
+    if (error || !data) throw new AppError('Profile not found', 404);
     return res.json(successResponse(data));
   } catch (err) { return next(err); }
 });
 
-// PATCH /users/me/profile
 router.patch('/me/profile', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = updateProfileSchema.parse(req.body);
@@ -41,22 +103,23 @@ router.patch('/me/profile', async (req: Request, res: Response, next: NextFuncti
     if (body.address !== undefined) updateData.address = body.address;
     if (body.gender) updateData.gender = body.gender;
     if (body.dateOfBirth) updateData.date_of_birth = body.dateOfBirth;
-    const data = await sbUpdate('profiles', `id=eq.${req.user!.id}`, updateData);
+    const { data, error } = await supabaseAdmin
+      .from('users').update(updateData).eq('id', req.user!.id).select().single();
+    if (error) throw new AppError('Failed to update profile', 500);
     return res.json(successResponse(data, 'Profile updated successfully'));
   } catch (err) { return next(err); }
 });
 
-// POST /users/me/avatar
 router.post('/me/avatar', upload.single('avatar'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (!req.file) throw new AppError('No file uploaded', 400);
     const url = await uploadFile(STORAGE_BUCKETS.AVATARS, req.file, req.user!.id);
-    await sbUpdate('profiles', `id=eq.${req.user!.id}`, { avatar_url: url });
-    return res.json(successResponse({ avatarUrl: url }));
+    const { data } = await supabaseAdmin
+      .from('users').update({ avatar_url: url }).eq('id', req.user!.id).select('avatar_url').single();
+    return res.json(successResponse({ avatarUrl: data?.avatar_url }));
   } catch (err) { return next(err); }
 });
 
-// PATCH /users/:id/profile (admin)
 router.patch('/:id/profile', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = updateProfileSchema.parse(req.body);
@@ -67,70 +130,107 @@ router.patch('/:id/profile', authorize('admin'), async (req: Request, res: Respo
     if (body.address !== undefined) updateData.address = body.address;
     if (body.gender) updateData.gender = body.gender;
     if (body.dateOfBirth) updateData.date_of_birth = body.dateOfBirth;
-    const data = await sbUpdate('profiles', `id=eq.${req.params.id}`, updateData);
-    if (!data) throw new AppError('User not found', 404);
+    const { data, error } = await supabaseAdmin
+      .from('users').update(updateData).eq('id', req.params.id).select().single();
+    if (error || !data) throw new AppError('User not found', 404);
     if (body.specialization && data.role === 'teacher') {
-      await sbUpdate('teachers', `profile_id=eq.${req.params.id}`, { specialization: body.specialization });
+      await supabaseAdmin.from('teachers')
+        .update({ specialization: body.specialization })
+        .eq('profile_id', req.params.id);
     }
     return res.json(successResponse(data, 'Profile updated'));
   } catch (err) { return next(err); }
 });
 
-// PATCH /users/:id/role (admin)
 router.patch('/:id/role', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { role } = z.object({ role: z.enum(['student', 'teacher', 'parent', 'admin']) }).parse(req.body);
-    const data = await sbUpdate('profiles', `id=eq.${req.params.id}`, { role });
-    if (!data) throw new AppError('User not found', 404);
+    const { role } = z.object({
+      role: z.enum(['student', 'teacher', 'parent', 'admin'])
+    }).parse(req.body);
+    const { data, error } = await supabaseAdmin
+      .from('users').update({ role }).eq('id', req.params.id).select().single();
+    if (error || !data) throw new AppError('User not found', 404);
     return res.json(successResponse(data, 'Role updated'));
   } catch (err) { return next(err); }
 });
 
-// GET /users (admin + teacher)
+// MODIFIÉ: Autoriser les enseignants à voir les étudiants
 router.get('/', authorize('admin', 'teacher'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { page, limit, offset } = getPagination(req);
     const { role, search } = req.query;
-    let params = `select=*&order=created_at.desc&offset=${offset}&limit=${limit}`;
-    if (role) params += `&role=eq.${role}`;
-    else if (req.user!.role === 'teacher') params += `&role=eq.student`;
-    if (search) params += `&or=(first_name.ilike.*${search}*,last_name.ilike.*${search}*,email.ilike.*${search}*)`;
-    const data = await sbGet('profiles', params);
-    return res.json(paginate(data, data.length, { page, limit, offset }));
+    
+    let query = supabaseAdmin
+      .from('users')
+      .select('*', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1);
+    
+    if (role) {
+      query = query.eq('role', role as string);
+    } else if (req.user!.role === 'teacher') {
+      // Les enseignants ne voient que les étudiants par défaut
+      query = query.eq('role', 'student');
+    }
+    
+    if (search) {
+      query = query.or(`first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%`);
+    }
+    
+    const { data, count, error } = await query;
+    if (error) throw new AppError('Failed to fetch users', 500);
+    
+    const enriched = await Promise.all((data || []).map(async (user: any) => {
+      const roleId = await getRoleId(user.id, user.role);
+      let className = null;
+      if (user.role === 'student' && roleId) {
+        const { data: student } = await supabaseAdmin
+          .from('students').select('classes(name)').eq('id', roleId).maybeSingle();
+        className = (student as any)?.classes?.name || null;
+      }
+      return {
+        ...user,
+        roleId,
+        roleData: className ? { classes: { name: className } } : undefined,
+      };
+    }));
+    
+    return res.json(paginate(enriched, count || 0, { page, limit, offset }));
   } catch (err) { return next(err); }
 });
 
-// GET /users/:id (admin + teacher)
 router.get('/:id', authorize('admin', 'teacher'), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const data = await sbGetOne('profiles', `id=eq.${req.params.id}&select=*`);
-    if (!data) throw new AppError('User not found', 404);
-    if (req.user!.role === 'teacher' && data.role !== 'student') throw new AppError('Forbidden', 403);
-    return res.json(successResponse(data));
+    const { data, error } = await supabaseAdmin
+      .from('users').select('*').eq('id', req.params.id).single();
+    if (error || !data) throw new AppError('User not found', 404);
+    
+    // Si c'est un enseignant, vérifier que l'utilisateur est un étudiant
+    if (req.user!.role === 'teacher' && data.role !== 'student') {
+      throw new AppError('Forbidden', 403);
+    }
+    
+    const roleId = await getRoleId(data.id, data.role);
+    const roleData = await getRoleData(data.id, data.role);
+    return res.json(successResponse({ ...data, roleId, roleData }));
   } catch (err) { return next(err); }
 });
 
-// PATCH /users/:id/status (admin)
 router.patch('/:id/status', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { isActive } = z.object({ isActive: z.boolean() }).parse(req.body);
-    const data = await sbUpdate('profiles', `id=eq.${req.params.id}`, { is_active: isActive });
-    if (!data) throw new AppError('User not found', 404);
+    const { data, error } = await supabaseAdmin
+      .from('users').update({ is_active: isActive }).eq('id', req.params.id).select().single();
+    if (error || !data) throw new AppError('User not found', 404);
     return res.json(successResponse(data, `User ${isActive ? 'activated' : 'deactivated'}`));
   } catch (err) { return next(err); }
 });
 
-// DELETE /users/:id (admin) — uses Supabase Auth Admin API via fetch
 router.delete('/:id', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (req.params.id === req.user!.id) throw new AppError('Cannot delete your own account', 400);
-    const SUPABASE_URL = process.env.SUPABASE_URL!;
-    const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-    const res2 = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${req.params.id}`, {
-      method: 'DELETE',
-      headers: { 'apikey': SUPABASE_SERVICE_KEY, 'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}` },
-    });
-    if (!res2.ok) throw new AppError('Failed to delete user', 500);
+    const { error } = await supabaseAdmin.auth.admin.deleteUser(req.params.id);
+    if (error) throw new AppError('Failed to delete user', 500);
     return res.status(204).send();
   } catch (err) { return next(err); }
 });
