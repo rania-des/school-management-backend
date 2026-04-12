@@ -1,5 +1,4 @@
 import { Router } from 'express';
-import { authenticate, authorize } from '../../middleware/auth.middleware';import { Router } from 'express';
 import { authenticate, authorize } from '../../middleware/auth.middleware';
 import { AppError } from '../../middleware/error.middleware';
 import { successResponse } from '../../utils/pagination';
@@ -631,7 +630,7 @@ router.delete('/announcements/:announcementId', async (req, res, next) => {
 // MESSAGERIE
 // =============================================================================
 
-// GET /api/v1/teacher/messages/conversations — VERSION CORRIGÉE (sans les joins)
+// GET /api/v1/teacher/messages/conversations
 router.get('/messages/conversations', async (req, res, next) => {
   try {
     const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
