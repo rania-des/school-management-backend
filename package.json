@@ -2,11 +2,11 @@
   "name": "school-management-backend",
   "version": "1.0.0",
   "description": "Backend API for School Management Platform — Teacher module",
-  "main": "dist/app.js",
+  "main": "dist/server.js",
   "scripts": {
-    "dev": "tsx watch app.ts",
+    "dev": "tsx watch server.ts",
     "build": "tsc",
-    "start": "node dist/app.js",
+    "start": "node dist/server.js",
     "clean": "rm -rf dist"
   },
   "dependencies": {

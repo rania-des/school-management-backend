@@ -16,20 +16,20 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Import routes
-import teacherRoutes from './modules/teacher/teacher.routes.js';
-import adminRoutes from './modules/admin/admin.routes.js';
-import studentRoutes from './modules/student/student.routes.js';
-import parentRoutes from './modules/parent/parent.routes.js';
-import scheduleRoutes from './modules/schedule/schedule.routes.js';
-import attendanceRoutes from './modules/attendance/attendance.routes.js';
-import assignmentsRoutes from './modules/assignments/assignments.routes.js';
-import announcementsRoutes from './modules/announcements/announcements.routes.js';
-import gradesRoutes from './modules/grades/grades.routes.js';
-import messagesRoutes from './modules/messages/messages.routes.js';
-import paymentsRoutes from './modules/payments/payments.routes.js';
-import meetingsRoutes from './modules/meetings/meetings.routes.js';
-import analyticsRoutes from './modules/analytics/analytics.routes.js';
-import usersRoutes from './modules/users/users.routes.js';
+import teacherRoutes from './modules/teacher/teacher.routes';
+import adminRoutes from './modules/admin/admin.routes';
+import studentRoutes from './modules/student/student.routes';
+import parentRoutes from './modules/parent/parent.routes';
+import scheduleRoutes from './modules/schedule/schedule.routes';
+import attendanceRoutes from './modules/attendance/attendance.routes';
+import assignmentsRoutes from './modules/assignments/assignments.routes';
+import announcementsRoutes from './modules/announcements/announcements.routes';
+import gradesRoutes from './modules/grades/grades.routes';
+import messagesRoutes from './modules/messages/messages.routes';
+import paymentsRoutes from './modules/payments/payments.routes';
+import meetingsRoutes from './modules/meetings/meetings.routes';
+import analyticsRoutes from './modules/analytics/analytics.routes';
+import usersRoutes from './modules/users/users.routes';
 
 // Routes
 app.use('/api/v1/teacher', teacherRoutes);
@@ -61,8 +61,5 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
   });
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
-  console.log(`📡 API available at http://localhost:${PORT}/api/v1`);
-});
+// Pour CommonJS, on utilise module.exports
+export = app;
