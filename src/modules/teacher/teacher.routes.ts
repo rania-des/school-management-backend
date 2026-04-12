@@ -10,7 +10,7 @@ const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SERVICE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
 // Helper fetch vers Supabase REST
-async function sb(table: string, params = '', options?: RequestInit) {
+async function sb(table: string, params = '', options?: RequestInit): Promise<any[]> {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}${params ? '?' + params : ''}`, {
     headers: {
       'apikey': SERVICE_KEY,
@@ -21,8 +21,8 @@ async function sb(table: string, params = '', options?: RequestInit) {
     ...options,
   });
   const data = await res.json();
-  if (!res.ok) throw new AppError(data?.message || 'Supabase error', 500);
-  return data;
+  if (!res.ok) throw new AppError((data as any)?.message || 'Supabase error', 500);
+  return Array.isArray(data) ? data : [data];
 }
 
 // Auth middleware
