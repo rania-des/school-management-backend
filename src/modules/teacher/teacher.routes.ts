@@ -1,5 +1,4 @@
 import { Router } from 'express';
-import { Router } from 'express';
 import { authenticate, authorize } from '../../middleware/auth.middleware';
 import { AppError } from '../../middleware/error.middleware';
 import { successResponse } from '../../utils/pagination';
@@ -176,26 +175,6 @@ router.get('/schedule', async (req, res, next) => {
       classes:  extractFirstItem(slot.classes),
     }));
     res.json(successResponse(formatted));
-  } catch (err) { next(err); }
-});
-
-// =============================================================================
-// STATISTIQUES
-// =============================================================================
-
-router.get('/stats', async (req, res, next) => {
-  try {
-    const teacherId = await getTeacherId(req.user!.id);
-    const [classesData, assignmentsData, gradesData] = await Promise.all([
-      sbGet('schedule_slots', `teacher_id=eq.${teacherId}&is_active=eq.true&select=class_id`),
-      sbGet('assignments', `teacher_id=eq.${teacherId}&select=id`),
-      sbGet('grades', `teacher_id=eq.${teacherId}&select=id`),
-    ]);
-    res.json(successResponse({
-      totalClasses:     classesData.length,
-      totalAssignments: assignmentsData.length,
-      totalGrades:      gradesData.length,
-    }));
   } catch (err) { next(err); }
 });
 
@@ -440,7 +419,6 @@ router.get('/messages/conversations', async (req, res, next) => {
       'messages',
       `or=(sender_id.eq.${myId},receiver_id.eq.${myId})&select=id,sender_id,receiver_id,content,created_at,is_read&order=created_at.desc`
     );
-    // Get unique conversations by partner
     const conversationsMap = new Map();
     for (const msg of data) {
       const partnerId = msg.sender_id === myId ? msg.receiver_id : msg.sender_id;
