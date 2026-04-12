@@ -627,7 +627,7 @@ router.delete('/announcements/:announcementId', async (req, res, next) => {
 });
 
 // =============================================================================
-// MESSAGERIE
+// MESSAGERIE - VERSION CORRIGÉE AVEC CONVERSATIONS
 // =============================================================================
 
 // GET /api/v1/teacher/messages/conversations
@@ -635,16 +635,37 @@ router.get('/messages/conversations', async (req, res, next) => {
   try {
     const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
-    
-    const resData = await fetch(
-      `${SUPABASE_URL}/rest/v1/messages?or=(sender_id.eq.${req.user!.id},receiver_id.eq.${req.user!.id})&select=id,sender_id,receiver_id,content,created_at,is_read&order=created_at.desc`,
-      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
+    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
+    const userId = req.user!.id;
+
+    // 1. Récupère les conversation_ids où le prof participe
+    const partRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/conversation_participants?profile_id=eq.${userId}&select=conversation_id`,
+      { headers: H }
     );
-    const data = (await resData.json()) as any[];
-    
-    if (!resData.ok) throw new AppError('Failed to fetch conversations', 500);
-    
-    res.json(successResponse(data || []));
+    const parts = await partRes.json() as any[];
+    if (!parts?.length) return res.json(successResponse([]));
+
+    const convIds = parts.map((p: any) => p.conversation_id).join(',');
+
+    // 2. Récupère les conversations
+    const convRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/conversations?id=in.(${convIds})&select=id,subject,created_at,created_by&order=created_at.desc`,
+      { headers: H }
+    );
+    const conversations = await convRes.json() as any[];
+
+    // 3. Pour chaque conversation, récupère le dernier message
+    const result = await Promise.all((conversations || []).map(async (conv: any) => {
+      const msgRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/messages?conversation_id=eq.${conv.id}&select=content,created_at,sender_id&order=created_at.desc&limit=1`,
+        { headers: H }
+      );
+      const msgs = await msgRes.json() as any[];
+      return { ...conv, last_message: msgs[0] || null };
+    }));
+
+    res.json(successResponse(result));
   } catch (err) { next(err); }
 });
 
@@ -655,10 +676,11 @@ router.get('/messages/:userId', async (req, res, next) => {
     const myId       = req.user!.id;
     const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
+    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
 
     const resData = await fetch(
       `${SUPABASE_URL}/rest/v1/messages?or=(and(sender_id.eq.${myId},receiver_id.eq.${userId}),and(sender_id.eq.${userId},receiver_id.eq.${myId}))&select=*&order=created_at`,
-      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
+      { headers: H }
     );
     const data = (await resData.json()) as any[];
 
@@ -667,7 +689,7 @@ router.get('/messages/:userId', async (req, res, next) => {
     // Marquer les messages reçus comme lus
     await fetch(`${SUPABASE_URL}/rest/v1/messages?receiver_id=eq.${myId}&sender_id=eq.${userId}&is_read=eq.false`, {
       method: 'PATCH',
-      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+      headers: { ...H, 'Content-Type': 'application/json' },
       body: JSON.stringify({ is_read: true })
     }).catch(() => {});
 
@@ -681,12 +703,13 @@ router.post('/messages', async (req, res, next) => {
     const { receiverId, content } = req.body;
     const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
+    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' };
 
     if (!receiverId || !content) throw new AppError('receiverId et content sont requis', 400);
 
     const resInsert = await fetch(`${SUPABASE_URL}/rest/v1/messages`, {
       method: 'POST',
-      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
+      headers: H,
       body: JSON.stringify({
         sender_id:   req.user!.id,
         receiver_id: receiverId,
@@ -721,14 +744,15 @@ router.get('/profile', async (req, res, next) => {
   try {
     const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
+    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
 
-    const resProfile = await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${req.user!.id}&select=*`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+    const resProfile = await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${req.user!.id}&select=*`, { headers: H });
     const profileArr = (await resProfile.json()) as any[];
     const profile = profileArr[0];
 
     if (!resProfile.ok || !profile) throw new AppError('Profile not found', 404);
 
-    const resTeacher = await fetch(`${SUPABASE_URL}/rest/v1/teachers?profile_id=eq.${req.user!.id}&select=*`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+    const resTeacher = await fetch(`${SUPABASE_URL}/rest/v1/teachers?profile_id=eq.${req.user!.id}&select=*`, { headers: H });
     const teacherArr = (await resTeacher.json()) as any[];
     const teacher = teacherArr[0];
 
@@ -742,6 +766,7 @@ router.patch('/profile', async (req, res, next) => {
     const { firstName, lastName, phone, address, gender, avatarUrl } = req.body;
     const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
+    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' };
 
     const updates: Record<string, any> = {};
     if (firstName !== undefined) updates.first_name  = firstName;
@@ -757,7 +782,7 @@ router.patch('/profile', async (req, res, next) => {
 
     const resUpdate = await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${req.user!.id}`, {
       method: 'PATCH',
-      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
+      headers: H,
       body: JSON.stringify(updates)
     });
     const dataArr = (await resUpdate.json()) as any[];
