@@ -1,46 +1,45 @@
 import { Router } from 'express';
 import { authenticate, authorize } from '../../middleware/auth.middleware';
-import { supabaseAdmin } from '../../config/supabase';
 import { AppError } from '../../middleware/error.middleware';
 import { successResponse } from '../../utils/pagination';
 import { createNotification, createBulkNotifications, getClassStudentProfileIds } from '../../utils/notifications';
 
 const router = Router();
 
-// Toutes les routes teacher nécessitent d'être authentifié + rôle teacher/admin
+const SUPABASE_URL = process.env.SUPABASE_URL!;
+const SERVICE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+
+// Helper fetch vers Supabase REST
+async function sb(table: string, params = '', options?: RequestInit) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}${params ? '?' + params : ''}`, {
+    headers: {
+      'apikey': SERVICE_KEY,
+      'Authorization': `Bearer ${SERVICE_KEY}`,
+      'Content-Type': 'application/json',
+      'Prefer': 'return=representation',
+    },
+    ...options,
+  });
+  const data = await res.json();
+  if (!res.ok) throw new AppError(data?.message || 'Supabase error', 500);
+  return data;
+}
+
+// Auth middleware
 router.use(authenticate);
 router.use(authorize('teacher', 'admin'));
 
-// ── Helper ────────────────────────────────────────────────────────────────────
+// Helper — récupérer l'ID teacher depuis profile_id
+async function getTeacherId(profileId: string): Promise<string> {
+  const rows = await sb('teachers', `profile_id=eq.${profileId}&select=id`);
+  if (!rows?.[0]) throw new AppError('Teacher not found', 404);
+  return rows[0].id;
+}
 
 function extractFirstItem(data: any): any {
   if (!data) return null;
   if (Array.isArray(data) && data.length > 0) return data[0];
   return data;
-}
-
-// Helper pour récupérer l'ID teacher depuis le profile_id
-async function getTeacherId(profileId: string): Promise<string> {
-  const { data: teacher } = await supabaseAdmin
-    .from('teachers')
-    .select('id')
-    .eq('profile_id', profileId)
-    .single();
-
-  if (teacher) return teacher.id;
-
-  const { data: created, error: createError } = await supabaseAdmin
-    .from('teachers')
-    .insert({ profile_id: profileId })
-    .select('id')
-    .single();
-
-  if (createError || !created) {
-    console.error(`getTeacherId: impossible de créer le teacher pour profile_id=${profileId}`, createError);
-    throw new AppError(`Teacher record not found and could not be created for profile ${profileId}`, 500);
-  }
-
-  return created.id;
 }
 
 // =============================================================================
@@ -50,19 +49,9 @@ async function getTeacherId(profileId: string): Promise<string> {
 router.get('/classes', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
-
-    const { data: slots, error } = await supabaseAdmin
-      .from('schedule_slots')
-      .select(`
-        class_id,
-        subject_id,
-        classes:class_id(id, name),
-        subjects:subject_id(id, name)
-      `)
-      .eq('teacher_id', teacherId)
-      .eq('is_active', true);
-
-    if (error) throw new AppError('Failed to fetch teacher classes', 500);
+    const slots = await sb('schedule_slots',
+      `teacher_id=eq.${teacherId}&is_active=eq.true&select=class_id,subject_id,classes:class_id(id,name),subjects:subject_id(id,name)`
+    );
 
     const classMap = new Map();
     for (const slot of slots || []) {
@@ -78,7 +67,6 @@ router.get('/classes', async (req, res, next) => {
         });
       }
     }
-
     res.json(successResponse(Array.from(classMap.values())));
   } catch (err) { next(err); }
 });
@@ -86,26 +74,13 @@ router.get('/classes', async (req, res, next) => {
 router.get('/students/:classId', async (req, res, next) => {
   try {
     const { classId } = req.params;
-
-    const { data: students, error } = await supabaseAdmin
-      .from('students')
-      .select(`
-        id,
-        profile_id,
-        student_number,
-        profiles:profile_id(first_name, last_name, email, avatar_url)
-      `)
-      .eq('class_id', classId);
-
-    if (error) throw new AppError('Failed to fetch students', 500);
-
+    const students = await sb('students',
+      `class_id=eq.${classId}&select=id,profile_id,student_number,profiles:profile_id(first_name,last_name,email,avatar_url)`
+    );
     const formatted = (students || []).map((s: any) => ({
-      id:             s.id,
-      profile_id:     s.profile_id,
-      student_number: s.student_number,
-      profile:        extractFirstItem(s.profiles),
+      id: s.id, profile_id: s.profile_id, student_number: s.student_number,
+      profile: extractFirstItem(s.profiles),
     }));
-
     res.json(successResponse(formatted));
   } catch (err) { next(err); }
 });
@@ -117,28 +92,35 @@ router.get('/students/:classId', async (req, res, next) => {
 router.get('/schedule', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
-
-    const { data: slots, error } = await supabaseAdmin
-      .from('schedule_slots')
-      .select(`
-        *,
-        subjects:subject_id(name, color),
-        classes:class_id(name)
-      `)
-      .eq('teacher_id', teacherId)
-      .eq('is_active', true)
-      .order('day_of_week')
-      .order('start_time');
-
-    if (error) throw new AppError('Failed to fetch schedule', 500);
-
+    const slots = await sb('schedule_slots',
+      `teacher_id=eq.${teacherId}&is_active=eq.true&select=*,subjects:subject_id(name,color),classes:class_id(name)&order=day_of_week,start_time`
+    );
     const formatted = (slots || []).map((slot: any) => ({
       ...slot,
       subjects: extractFirstItem(slot.subjects),
       classes:  extractFirstItem(slot.classes),
     }));
-
     res.json(successResponse(formatted));
+  } catch (err) { next(err); }
+});
+
+// =============================================================================
+// STATISTIQUES
+// =============================================================================
+
+router.get('/stats', async (req, res, next) => {
+  try {
+    const teacherId = await getTeacherId(req.user!.id);
+    const [classes, assignments, grades] = await Promise.all([
+      sb('schedule_slots', `teacher_id=eq.${teacherId}&is_active=eq.true&select=class_id`),
+      sb('assignments',    `teacher_id=eq.${teacherId}&select=id`),
+      sb('grades',         `teacher_id=eq.${teacherId}&select=id`),
+    ]);
+    res.json(successResponse({
+      totalClasses:     classes?.length     || 0,
+      totalAssignments: assignments?.length || 0,
+      totalGrades:      grades?.length      || 0,
+    }));
   } catch (err) { next(err); }
 });
 
@@ -151,28 +133,17 @@ router.get('/grades', async (req, res, next) => {
     const teacherId = await getTeacherId(req.user!.id);
     const { classId, subjectId, period } = req.query;
 
-    let query = supabaseAdmin
-      .from('grades')
-      .select(`
-        *,
-        students:student_id(id, student_number, profiles:profile_id(first_name, last_name)),
-        subjects:subject_id(name)
-      `)
-      .eq('teacher_id', teacherId);
+    let params = `teacher_id=eq.${teacherId}&select=*,students:student_id(id,student_number,profiles:profile_id(first_name,last_name)),subjects:subject_id(name)&order=created_at.desc`;
+    if (classId)   params += `&class_id=eq.${classId}`;
+    if (subjectId) params += `&subject_id=eq.${subjectId}`;
+    if (period)    params += `&period=eq.${period}`;
 
-    if (classId)   query = query.eq('class_id',   classId as string);
-    if (subjectId) query = query.eq('subject_id', subjectId as string);
-    if (period)    query = query.eq('period',      period as string);
-
-    const { data, error } = await query.order('created_at', { ascending: false });
-    if (error) throw new AppError('Failed to fetch grades', 500);
-
+    const data = await sb('grades', params);
     const formatted = (data || []).map((g: any) => ({
       ...g,
       student: extractFirstItem(g.students),
       subject: extractFirstItem(g.subjects),
     }));
-
     res.json(successResponse(formatted));
   } catch (err) { next(err); }
 });
@@ -182,66 +153,46 @@ router.post('/grades', async (req, res, next) => {
     const teacherId = await getTeacherId(req.user!.id);
     const { studentId, classId, subjectId, value, maxValue, period, type, comment } = req.body;
 
-    if (!studentId || !classId || !subjectId || value === undefined || !period) {
+    if (!studentId || !classId || !subjectId || value === undefined || !period)
       throw new AppError('studentId, classId, subjectId, value et period sont requis', 400);
-    }
 
-    const { data, error } = await supabaseAdmin
-      .from('grades')
-      .insert({
-        teacher_id: teacherId,
-        student_id: studentId,
-        class_id:   classId,
-        subject_id: subjectId,
-        value:      Number(value),
-        max_value:  maxValue ? Number(maxValue) : 20,
-        period,
-        type:       type || 'exam',
-        comment:    comment || null,
-      })
-      .select()
-      .single();
+    const data = await sb('grades', '', {
+      method: 'POST',
+      body: JSON.stringify({
+        teacher_id: teacherId, student_id: studentId, class_id: classId,
+        subject_id: subjectId, value: Number(value), max_value: maxValue ? Number(maxValue) : 20,
+        period, type: type || 'exam', comment: comment || null,
+      }),
+    });
 
-    if (error) throw new AppError(`Failed to create grade: ${error.message}`, 500);
+    const grade = Array.isArray(data) ? data[0] : data;
 
-    const { data: student } = await supabaseAdmin
-      .from('students')
-      .select('profile_id')
-      .eq('id', studentId)
-      .single();
-
-    if (student?.profile_id) {
+    const students = await sb('students', `id=eq.${studentId}&select=profile_id`);
+    if (students?.[0]?.profile_id) {
       await createNotification({
-        recipientId: student.profile_id,
-        type:        'grade',
-        title:       'Nouvelle note ajoutée',
-        body:        `Une note de ${value}/${maxValue || 20} a été ajoutée.`,
-        data:        { gradeId: data.id },
+        recipientId: students[0].profile_id, type: 'grade',
+        title: 'Nouvelle note ajoutée',
+        body: `Une note de ${value}/${maxValue || 20} a été ajoutée.`,
+        data: { gradeId: grade?.id },
       });
     }
 
-    res.status(201).json(successResponse(data, 'Note ajoutée avec succès'));
+    res.status(201).json(successResponse(grade, 'Note ajoutée avec succès'));
   } catch (err) { next(err); }
 });
 
 router.put('/grades/:gradeId', async (req, res, next) => {
   try {
-    const teacherId         = await getTeacherId(req.user!.id);
-    const { gradeId }       = req.params;
+    const teacherId   = await getTeacherId(req.user!.id);
+    const { gradeId } = req.params;
     const { value, maxValue, comment } = req.body;
 
-    const { data, error } = await supabaseAdmin
-      .from('grades')
-      .update({ value: Number(value), max_value: maxValue ? Number(maxValue) : undefined, comment })
-      .eq('id', gradeId)
-      .eq('teacher_id', teacherId)
-      .select()
-      .single();
-
-    if (error) throw new AppError('Failed to update grade', 500);
-    if (!data)  throw new AppError('Grade not found or not authorized', 404);
-
-    res.json(successResponse(data, 'Note modifiée avec succès'));
+    const data = await sb('grades', `id=eq.${gradeId}&teacher_id=eq.${teacherId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ value: Number(value), max_value: maxValue ? Number(maxValue) : undefined, comment }),
+    });
+    if (!data?.length) throw new AppError('Grade not found or not authorized', 404);
+    res.json(successResponse(data[0], 'Note modifiée avec succès'));
   } catch (err) { next(err); }
 });
 
@@ -249,15 +200,7 @@ router.delete('/grades/:gradeId', async (req, res, next) => {
   try {
     const teacherId   = await getTeacherId(req.user!.id);
     const { gradeId } = req.params;
-
-    const { error } = await supabaseAdmin
-      .from('grades')
-      .delete()
-      .eq('id', gradeId)
-      .eq('teacher_id', teacherId);
-
-    if (error) throw new AppError('Failed to delete grade', 500);
-
+    await sb('grades', `id=eq.${gradeId}&teacher_id=eq.${teacherId}`, { method: 'DELETE' });
     res.json(successResponse(null, 'Note supprimée'));
   } catch (err) { next(err); }
 });
@@ -269,30 +212,18 @@ router.delete('/grades/:gradeId', async (req, res, next) => {
 router.get('/assignments', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
-    const { classId, subjectId, type } = req.query;
+    const { classId, subjectId } = req.query;
 
-    let query = supabaseAdmin
-      .from('assignments')
-      .select(`
-        *,
-        subjects:subject_id(name),
-        classes:class_id(name)
-      `)
-      .eq('teacher_id', teacherId);
+    let params = `teacher_id=eq.${teacherId}&select=*,subjects:subject_id(name),classes:class_id(name)&order=due_date`;
+    if (classId)   params += `&class_id=eq.${classId}`;
+    if (subjectId) params += `&subject_id=eq.${subjectId}`;
 
-    if (classId)   query = query.eq('class_id',   classId as string);
-    if (subjectId) query = query.eq('subject_id', subjectId as string);
-    if (type)      query = query.eq('type',       type as string);
-
-    const { data, error } = await query.order('due_date', { ascending: true });
-    if (error) throw new AppError('Failed to fetch assignments', 500);
-
+    const data = await sb('assignments', params);
     const formatted = (data || []).map((a: any) => ({
       ...a,
       subject: extractFirstItem(a.subjects),
       class:   extractFirstItem(a.classes),
     }));
-
     res.json(successResponse(formatted));
   } catch (err) { next(err); }
 });
@@ -300,46 +231,45 @@ router.get('/assignments', async (req, res, next) => {
 router.post('/assignments', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
-    const { classId, subjectId, title, description, dueDate, type, fileData, fileName } = req.body;
+    const { classId, subjectId, title, description, dueDate, type, maxScore } = req.body;
 
-    if (!classId || !subjectId || !title) {
-      throw new AppError('classId, subjectId et title sont requis', 400);
-    }
+    if (!classId || !subjectId || !title || !dueDate)
+      throw new AppError('classId, subjectId, title et dueDate sont requis', 400);
 
-    let fileUrl: string | null = null;
-    if (fileData && fileName) {
-      fileUrl = fileData;
-    }
-
-    const { data, error } = await supabaseAdmin
-      .from('assignments')
-      .insert({
-        teacher_id:  teacherId,
-        class_id:    classId,
-        subject_id:  subjectId,
-        title,
-        description: description || null,
-        due_date:    dueDate || null,
-        type:        type || 'homework',
-        file_url:    fileUrl,
-        file_name:   fileName || null,
-      })
-      .select()
-      .single();
-
-    if (error) throw new AppError(`Failed to create assignment: ${error.message}`, 500);
+    const data = await sb('assignments', '', {
+      method: 'POST',
+      body: JSON.stringify({
+        teacher_id: teacherId, class_id: classId, subject_id: subjectId,
+        title, description: description || null, due_date: dueDate,
+        type: type || 'homework', max_score: maxScore ? Number(maxScore) : null,
+      }),
+    });
+    const assignment = Array.isArray(data) ? data[0] : data;
 
     const studentProfileIds = await getClassStudentProfileIds(classId);
     if (studentProfileIds.length > 0) {
       await createBulkNotifications(studentProfileIds, {
-        type:  'assignment',
-        title: `Nouveau devoir : ${title}`,
-        body:  dueDate ? `À rendre pour le ${new Date(dueDate).toLocaleDateString('fr-FR')}` : 'Nouveau devoir disponible',
-        data:  { assignmentId: data.id },
+        type: 'assignment', title: `Nouveau devoir : ${title}`,
+        body: `À rendre pour le ${new Date(dueDate).toLocaleDateString('fr-FR')}`,
+        data: { assignmentId: assignment?.id },
       });
     }
+    res.status(201).json(successResponse(assignment, 'Devoir créé avec succès'));
+  } catch (err) { next(err); }
+});
 
-    res.status(201).json(successResponse(data, 'Devoir créé avec succès'));
+router.put('/assignments/:assignmentId', async (req, res, next) => {
+  try {
+    const teacherId        = await getTeacherId(req.user!.id);
+    const { assignmentId } = req.params;
+    const { title, description, dueDate, type, maxScore } = req.body;
+
+    const data = await sb('assignments', `id=eq.${assignmentId}&teacher_id=eq.${teacherId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ title, description, due_date: dueDate, type, max_score: maxScore ? Number(maxScore) : undefined }),
+    });
+    if (!data?.length) throw new AppError('Assignment not found or not authorized', 404);
+    res.json(successResponse(data[0], 'Devoir modifié'));
   } catch (err) { next(err); }
 });
 
@@ -347,15 +277,7 @@ router.delete('/assignments/:assignmentId', async (req, res, next) => {
   try {
     const teacherId        = await getTeacherId(req.user!.id);
     const { assignmentId } = req.params;
-
-    const { error } = await supabaseAdmin
-      .from('assignments')
-      .delete()
-      .eq('id', assignmentId)
-      .eq('teacher_id', teacherId);
-
-    if (error) throw new AppError('Failed to delete assignment', 500);
-
+    await sb('assignments', `id=eq.${assignmentId}&teacher_id=eq.${teacherId}`, { method: 'DELETE' });
     res.json(successResponse(null, 'Devoir supprimé'));
   } catch (err) { next(err); }
 });
@@ -365,30 +287,13 @@ router.get('/assignments/:assignmentId/submissions', async (req, res, next) => {
     const teacherId        = await getTeacherId(req.user!.id);
     const { assignmentId } = req.params;
 
-    const { data: assignment } = await supabaseAdmin
-      .from('assignments')
-      .select('id')
-      .eq('id', assignmentId)
-      .eq('teacher_id', teacherId)
-      .single();
+    const asgmt = await sb('assignments', `id=eq.${assignmentId}&teacher_id=eq.${teacherId}&select=id`);
+    if (!asgmt?.length) throw new AppError('Assignment not found or not authorized', 404);
 
-    if (!assignment) throw new AppError('Assignment not found or not authorized', 404);
-
-    const { data, error } = await supabaseAdmin
-      .from('submissions')
-      .select(`
-        *,
-        students:student_id(id, student_number, profiles:profile_id(first_name, last_name))
-      `)
-      .eq('assignment_id', assignmentId);
-
-    if (error) throw new AppError('Failed to fetch submissions', 500);
-
-    const formatted = (data || []).map((s: any) => ({
-      ...s,
-      student: extractFirstItem(s.students),
-    }));
-
+    const data = await sb('submissions',
+      `assignment_id=eq.${assignmentId}&select=*,students:student_id(id,student_number,profiles:profile_id(first_name,last_name))`
+    );
+    const formatted = (data || []).map((s: any) => ({ ...s, student: extractFirstItem(s.students) }));
     res.json(successResponse(formatted));
   } catch (err) { next(err); }
 });
@@ -397,21 +302,13 @@ router.patch('/submissions/:submissionId/grade', async (req, res, next) => {
   try {
     const { submissionId } = req.params;
     const { score, feedback } = req.body;
+    if (score === undefined) throw new AppError('score est requis', 400);
 
-    const updateData: any = { status: 'graded' };
-    if (score !== undefined) updateData.score = Number(score);
-    if (feedback !== undefined) updateData.feedback = feedback;
-
-    const { data, error } = await supabaseAdmin
-      .from('submissions')
-      .update(updateData)
-      .eq('id', submissionId)
-      .select()
-      .single();
-
-    if (error) throw new AppError('Failed to grade submission', 500);
-
-    res.json(successResponse(data, 'Soumission mise à jour'));
+    const data = await sb('submissions', `id=eq.${submissionId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ score: Number(score), feedback: feedback || null, status: 'graded' }),
+    });
+    res.json(successResponse(Array.isArray(data) ? data[0] : data, 'Soumission notée'));
   } catch (err) { next(err); }
 });
 
@@ -419,104 +316,109 @@ router.patch('/submissions/:submissionId/grade', async (req, res, next) => {
 // PRÉSENCES (ATTENDANCE)
 // =============================================================================
 
+router.get('/attendance', async (req, res, next) => {
+  try {
+    const teacherId = await getTeacherId(req.user!.id);
+    const { classId, date, startDate, endDate } = req.query;
+
+    let params = `teacher_id=eq.${teacherId}&select=*,students:student_id(id,student_number,profiles:profile_id(first_name,last_name))&order=date.desc`;
+    if (classId)   params += `&class_id=eq.${classId}`;
+    if (date)      params += `&date=eq.${date}`;
+    if (startDate) params += `&date=gte.${startDate}`;
+    if (endDate)   params += `&date=lte.${endDate}`;
+
+    const data = await sb('attendance', params);
+    const formatted = (data || []).map((a: any) => ({ ...a, student: extractFirstItem(a.students) }));
+    res.json(successResponse(formatted));
+  } catch (err) { next(err); }
+});
+
 router.post('/attendance', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
     const { records } = req.body;
-
-    if (!Array.isArray(records) || records.length === 0) {
+    if (!Array.isArray(records) || records.length === 0)
       throw new AppError('records[] est requis', 400);
-    }
 
     const rows = records.map((r: any) => ({
-      teacher_id: teacherId,
-      student_id: r.studentId,
-      class_id:   r.classId,
-      status:     r.status,
-      date:       r.date,
-      note:       r.note || null,
+      teacher_id: teacherId, student_id: r.studentId, class_id: r.classId,
+      status: r.status, date: r.date, note: r.note || null,
     }));
 
-    const { data, error } = await supabaseAdmin
-      .from('attendance')
-      .upsert(rows, { onConflict: 'student_id,class_id,date' })
-      .select();
+    const data = await sb('attendance', 'on_conflict=student_id,class_id,date', {
+      method: 'POST',
+      headers: {
+        'apikey': SERVICE_KEY, 'Authorization': `Bearer ${SERVICE_KEY}`,
+        'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates,return=representation',
+      } as any,
+      body: JSON.stringify(rows),
+    });
 
-    if (error) throw new AppError(`Failed to save attendance: ${error.message}`, 500);
-
+    const absents = records.filter((r: any) => r.status === 'absent');
+    for (const absent of absents) {
+      const students = await sb('students', `id=eq.${absent.studentId}&select=id,profile_id`);
+      const student = students?.[0];
+      if (student) {
+        const parentLinks = await sb('parent_student', `student_id=eq.${student.id}&select=parents:parent_id(profile_id)`);
+        const parentProfileIds = (parentLinks || []).map((pl: any) => extractFirstItem(pl.parents)?.profile_id).filter(Boolean);
+        if (parentProfileIds.length > 0) {
+          await createBulkNotifications(parentProfileIds, {
+            type: 'absence', title: 'Absence signalée',
+            body: `Votre enfant a été marqué absent le ${absent.date}.`,
+            data: { studentId: student.id, date: absent.date },
+          });
+        }
+      }
+    }
     res.status(201).json(successResponse(data, 'Présences enregistrées'));
   } catch (err) { next(err); }
 });
 
 // =============================================================================
-// ANNONCES (ANNOUNCEMENTS)
+// ANNONCES
 // =============================================================================
 
 router.get('/announcements', async (req, res, next) => {
   try {
-    const { data, error } = await supabaseAdmin
-      .from('announcements')
-      .select(`
-        *,
-        classes:class_id(name)
-      `)
-      .eq('author_id', req.user!.id)
-      .order('published_at', { ascending: false });
-
-    if (error) throw new AppError('Failed to fetch announcements', 500);
-
+    const { classId } = req.query;
+    let params = `select=*&order=created_at.desc`;
+    if (classId) params += `&class_id=eq.${classId}`;
+    const data = await sb('announcements', params);
     res.json(successResponse(data || []));
   } catch (err) { next(err); }
 });
 
 router.post('/announcements', async (req, res, next) => {
   try {
-    const { title, content, classId } = req.body;
-
+    const { title, content, classId, targetRole } = req.body;
     if (!title || !content) throw new AppError('title et content sont requis', 400);
 
-    const { data, error } = await supabaseAdmin
-      .from('announcements')
-      .insert({
-        author_id:    req.user!.id,
-        title,
-        content,
-        class_id:     classId || null,
-        published_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
-
-    if (error) throw new AppError(`Failed to create announcement: ${error.message}`, 500);
+    const data = await sb('announcements', '', {
+      method: 'POST',
+      body: JSON.stringify({
+        author_id: req.user!.id, title, content,
+        class_id: classId || null, target_role: targetRole || null,
+      }),
+    });
+    const announcement = Array.isArray(data) ? data[0] : data;
 
     if (classId) {
       const studentProfileIds = await getClassStudentProfileIds(classId);
       if (studentProfileIds.length > 0) {
         await createBulkNotifications(studentProfileIds, {
-          type:  'announcement',
-          title: `Nouvelle annonce : ${title}`,
-          body:  content.substring(0, 100),
-          data:  { announcementId: data.id },
+          type: 'announcement', title: `Nouvelle annonce : ${title}`,
+          body: content.substring(0, 100), data: { announcementId: announcement?.id },
         });
       }
     }
-
-    res.status(201).json(successResponse(data, 'Annonce publiée'));
+    res.status(201).json(successResponse(announcement, 'Annonce publiée'));
   } catch (err) { next(err); }
 });
 
 router.delete('/announcements/:announcementId', async (req, res, next) => {
   try {
     const { announcementId } = req.params;
-
-    const { error } = await supabaseAdmin
-      .from('announcements')
-      .delete()
-      .eq('id', announcementId)
-      .eq('author_id', req.user!.id);
-
-    if (error) throw new AppError('Failed to delete announcement', 500);
-
+    await sb('announcements', `id=eq.${announcementId}&author_id=eq.${req.user!.id}`, { method: 'DELETE' });
     res.json(successResponse(null, 'Annonce supprimée'));
   } catch (err) { next(err); }
 });
@@ -528,82 +430,23 @@ router.delete('/announcements/:announcementId', async (req, res, next) => {
 router.get('/messages/conversations', async (req, res, next) => {
   try {
     const myId = req.user!.id;
-
-    const { data: messages, error } = await supabaseAdmin
-      .from('messages')
-      .select('id, sender_id, receiver_id, content, created_at, is_read')
-      .or(`sender_id.eq.${myId},receiver_id.eq.${myId}`)
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      console.error('messages/conversations Supabase error:', error);
-      throw new AppError('Failed to fetch conversations', 500);
-    }
-
-    const partnerIds = [
-      ...new Set(
-        (messages || []).map((m: any) => (m.sender_id === myId ? m.receiver_id : m.sender_id))
-      ),
-    ];
-
-    let profilesMap: Record<string, any> = {};
-    if (partnerIds.length > 0) {
-      const { data: profiles } = await supabaseAdmin
-        .from('profiles')
-        .select('id, first_name, last_name, avatar_url')
-        .in('id', partnerIds);
-
-      (profiles || []).forEach((p: any) => { profilesMap[p.id] = p; });
-    }
-
-    const enriched = (messages || []).map((m: any) => {
-      const isMe      = m.sender_id === myId;
-      const partnerId = isMe ? m.receiver_id : m.sender_id;
-      const partner   = profilesMap[partnerId] || {};
-      return {
-        id: m.id,
-        content: m.content,
-        created_at: m.created_at,
-        partnerId,
-        otherName: partner.first_name
-          ? `${partner.first_name} ${partner.last_name || ''}`.trim()
-          : 'Utilisateur',
-      };
-    });
-
-    const unique = new Map();
-    for (const conv of enriched) {
-      if (!unique.has(conv.partnerId)) {
-        unique.set(conv.partnerId, conv);
-      }
-    }
-
-    res.json(successResponse(Array.from(unique.values())));
+    const data = await sb('messages',
+      `or=(sender_id.eq.${myId},receiver_id.eq.${myId})&select=id,sender_id,receiver_id,content,created_at,is_read,sender:sender_id(first_name,last_name,avatar_url),receiver:receiver_id(first_name,last_name,avatar_url)&order=created_at.desc`
+    );
+    res.json(successResponse(data || []));
   } catch (err) { next(err); }
 });
 
 router.get('/messages/:userId', async (req, res, next) => {
   try {
     const { userId } = req.params;
-    const myId       = req.user!.id;
-
-    const { data, error } = await supabaseAdmin
-      .from('messages')
-      .select('*')
-      .or(
-        `and(sender_id.eq.${myId},receiver_id.eq.${userId}),and(sender_id.eq.${userId},receiver_id.eq.${myId})`
-      )
-      .order('created_at', { ascending: true });
-
-    if (error) throw new AppError('Failed to fetch messages', 500);
-
-    await supabaseAdmin
-      .from('messages')
-      .update({ is_read: true })
-      .eq('receiver_id', myId)
-      .eq('sender_id', userId)
-      .eq('is_read', false);
-
+    const myId = req.user!.id;
+    const data = await sb('messages',
+      `or=(and(sender_id.eq.${myId},receiver_id.eq.${userId}),and(sender_id.eq.${userId},receiver_id.eq.${myId}))&select=*&order=created_at`
+    );
+    await sb('messages', `receiver_id=eq.${myId}&sender_id=eq.${userId}&is_read=eq.false`, {
+      method: 'PATCH', body: JSON.stringify({ is_read: true }),
+    });
     res.json(successResponse(data || []));
   } catch (err) { next(err); }
 });
@@ -611,31 +454,54 @@ router.get('/messages/:userId', async (req, res, next) => {
 router.post('/messages', async (req, res, next) => {
   try {
     const { receiverId, content } = req.body;
-
     if (!receiverId || !content) throw new AppError('receiverId et content sont requis', 400);
 
-    const { data, error } = await supabaseAdmin
-      .from('messages')
-      .insert({
-        sender_id:   req.user!.id,
-        receiver_id: receiverId,
-        content,
-        is_read:     false,
-      })
-      .select()
-      .single();
-
-    if (error) throw new AppError(`Failed to send message: ${error.message}`, 500);
+    const data = await sb('messages', '', {
+      method: 'POST',
+      body: JSON.stringify({ sender_id: req.user!.id, receiver_id: receiverId, content, is_read: false }),
+    });
+    const message = Array.isArray(data) ? data[0] : data;
 
     await createNotification({
-      recipientId: receiverId,
-      type:        'message',
-      title:       `Nouveau message`,
-      body:        content.substring(0, 100),
-      data:        { messageId: data.id, senderId: req.user!.id },
+      recipientId: receiverId, type: 'message',
+      title: `Message de ${req.user!.firstName || ''} ${req.user!.lastName || ''}`.trim(),
+      body: content.substring(0, 100), data: { messageId: message?.id, senderId: req.user!.id },
     });
+    res.status(201).json(successResponse(message, 'Message envoyé'));
+  } catch (err) { next(err); }
+});
 
-    res.status(201).json(successResponse(data, 'Message envoyé'));
+// =============================================================================
+// PROFIL
+// =============================================================================
+
+router.get('/profile', async (req, res, next) => {
+  try {
+    const profiles = await sb('profiles', `id=eq.${req.user!.id}&select=*`);
+    if (!profiles?.length) throw new AppError('Profile not found', 404);
+    const teachers = await sb('teachers', `profile_id=eq.${req.user!.id}&select=*`);
+    res.json(successResponse({ ...profiles[0], teacherData: teachers?.[0] || null }));
+  } catch (err) { next(err); }
+});
+
+router.patch('/profile', async (req, res, next) => {
+  try {
+    const { firstName, lastName, phone, address, gender, avatarUrl } = req.body;
+    const updates: Record<string, any> = {};
+    if (firstName !== undefined) updates.first_name = firstName;
+    if (lastName  !== undefined) updates.last_name  = lastName;
+    if (phone     !== undefined) updates.phone      = phone;
+    if (address   !== undefined) updates.address    = address;
+    if (gender    !== undefined) updates.gender     = gender;
+    if (avatarUrl !== undefined) updates.avatar_url = avatarUrl;
+
+    if (Object.keys(updates).length === 0)
+      throw new AppError('Aucune donnée à mettre à jour', 400);
+
+    const data = await sb('profiles', `id=eq.${req.user!.id}`, {
+      method: 'PATCH', body: JSON.stringify(updates),
+    });
+    res.json(successResponse(Array.isArray(data) ? data[0] : data, 'Profil mis à jour'));
   } catch (err) { next(err); }
 });
 
