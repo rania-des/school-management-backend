@@ -20,14 +20,29 @@ function extractFirstItem(data: any): any {
 }
 
 // Helper pour récupérer l'ID teacher depuis le profile_id
+// FIX: si la ligne n'existe pas encore dans la table teachers, on la crée automatiquement
 async function getTeacherId(profileId: string): Promise<string> {
   const { data: teacher } = await supabaseAdmin
     .from('teachers')
     .select('id')
     .eq('profile_id', profileId)
     .single();
-  if (!teacher) throw new AppError('Teacher not found', 404);
-  return teacher.id;
+
+  if (teacher) return teacher.id;
+
+  // Ligne manquante → on la crée à la volée
+  const { data: created, error: createError } = await supabaseAdmin
+    .from('teachers')
+    .insert({ profile_id: profileId })
+    .select('id')
+    .single();
+
+  if (createError || !created) {
+    console.error(`getTeacherId: impossible de créer le teacher pour profile_id=${profileId}`, createError);
+    throw new AppError(`Teacher record not found and could not be created for profile ${profileId}`, 500);
+  }
+
+  return created.id;
 }
 
 // =============================================================================
@@ -642,26 +657,57 @@ router.delete('/announcements/:announcementId', async (req, res, next) => {
 // =============================================================================
 
 // GET /api/v1/teacher/messages/conversations
+// FIX: suppression des joins relationnels Supabase sur sender/receiver qui causaient le 500.
+// On récupère les messages bruts puis on déduplique côté serveur.
 router.get('/messages/conversations', async (req, res, next) => {
   try {
-    const { data, error } = await supabaseAdmin
+    const myId = req.user!.id;
+
+    const { data: messages, error } = await supabaseAdmin
       .from('messages')
-      .select(`
-        id,
-        sender_id,
-        receiver_id,
-        content,
-        created_at,
-        is_read,
-        sender:sender_id(first_name, last_name, avatar_url),
-        receiver:receiver_id(first_name, last_name, avatar_url)
-      `)
-      .or(`sender_id.eq.${req.user!.id},receiver_id.eq.${req.user!.id}`)
+      .select('id, sender_id, receiver_id, content, created_at, is_read')
+      .or(`sender_id.eq.${myId},receiver_id.eq.${myId}`)
       .order('created_at', { ascending: false });
 
-    if (error) throw new AppError('Failed to fetch conversations', 500);
+    if (error) {
+      console.error('messages/conversations Supabase error:', error);
+      throw new AppError('Failed to fetch conversations', 500);
+    }
 
-    res.json(successResponse(data || []));
+    // Récupérer les profils des interlocuteurs uniques
+    const partnerIds = [
+      ...new Set(
+        (messages || []).map((m: any) => (m.sender_id === myId ? m.receiver_id : m.sender_id))
+      ),
+    ];
+
+    let profilesMap: Record<string, any> = {};
+    if (partnerIds.length > 0) {
+      const { data: profiles } = await supabaseAdmin
+        .from('profiles')
+        .select('id, first_name, last_name, avatar_url')
+        .in('id', partnerIds);
+
+      (profiles || []).forEach((p: any) => { profilesMap[p.id] = p; });
+    }
+
+    // Enrichir chaque message avec les infos de l'interlocuteur
+    const enriched = (messages || []).map((m: any) => {
+      const isMe      = m.sender_id === myId;
+      const partnerId = isMe ? m.receiver_id : m.sender_id;
+      const partner   = profilesMap[partnerId] || {};
+      return {
+        ...m,
+        sender:   profilesMap[m.sender_id]   || null,
+        receiver: profilesMap[m.receiver_id] || null,
+        partnerId,
+        otherName: partner.first_name
+          ? `${partner.first_name} ${partner.last_name || ''}`.trim()
+          : 'Utilisateur',
+      };
+    });
+
+    res.json(successResponse(enriched));
   } catch (err) { next(err); }
 });
 
