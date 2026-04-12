@@ -27,7 +27,7 @@ async function getTeacherId(profileId: string): Promise<string> {
     `${SUPABASE_URL}/rest/v1/teachers?profile_id=eq.${profileId}&select=id`,
     { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
   );
-  const data = await res.json() as any[];
+  const data = (await res.json()) as any[];
   if (!data?.[0]?.id) throw new AppError('Teacher not found', 404);
   return data[0].id;
 }
@@ -48,7 +48,7 @@ router.get('/classes', async (req, res, next) => {
       `${SUPABASE_URL}/rest/v1/schedule_slots?teacher_id=eq.${teacherId}&is_active=eq.true&select=class_id,subject_id,classes:class_id(id,name),subjects:subject_id(id,name)`,
       { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
     );
-    const slots: any[] = await resSlots.json();
+    const slots = (await resSlots.json()) as any[];
 
     if (!resSlots.ok) throw new AppError('Failed to fetch teacher classes', 500);
 
@@ -82,7 +82,7 @@ router.get('/students/:classId', async (req, res, next) => {
       `${SUPABASE_URL}/rest/v1/students?class_id=eq.${classId}&select=id,profile_id,student_number,profiles:profile_id(first_name,last_name,email,avatar_url)`,
       { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
     );
-    const students: any[] = await resStudents.json();
+    const students = (await resStudents.json()) as any[];
 
     if (!resStudents.ok) throw new AppError('Failed to fetch students', 500);
 
@@ -112,7 +112,7 @@ router.get('/schedule', async (req, res, next) => {
       `${SUPABASE_URL}/rest/v1/schedule_slots?teacher_id=eq.${teacherId}&is_active=eq.true&select=*,subjects:subject_id(name,color),classes:class_id(name)&order=day_of_week,start_time`,
       { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
     );
-    const slots: any[] = await resSlots.json();
+    const slots = (await resSlots.json()) as any[];
 
     if (!resSlots.ok) throw new AppError('Failed to fetch schedule', 500);
 
@@ -143,9 +143,9 @@ router.get('/stats', async (req, res, next) => {
       fetch(`${SUPABASE_URL}/rest/v1/grades?teacher_id=eq.${teacherId}&select=id`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }),
     ]);
 
-    const classesData: any[] = await classesRes.json();
-    const assignmentsData: any[] = await assignmentsRes.json();
-    const gradesData: any[] = await gradesRes.json();
+    const classesData = (await classesRes.json()) as any[];
+    const assignmentsData = (await assignmentsRes.json()) as any[];
+    const gradesData = (await gradesRes.json()) as any[];
 
     res.json(successResponse({
       totalClasses:     classesData?.length || 0,
@@ -173,7 +173,7 @@ router.get('/grades', async (req, res, next) => {
     if (period)    url += `&period=eq.${period}`;
 
     const resData = await fetch(url, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
-    const data: any[] = await resData.json();
+    const data = (await resData.json()) as any[];
 
     if (!resData.ok) throw new AppError('Failed to fetch grades', 500);
 
@@ -214,13 +214,15 @@ router.post('/grades', async (req, res, next) => {
         comment:    comment || null,
       })
     });
-    const data: any = (await resInsert.json())[0];
+    const dataArr = (await resInsert.json()) as any[];
+    const data = dataArr[0];
 
     if (!resInsert.ok) throw new AppError(`Failed to create grade`, 500);
 
     // Notification à l'élève
     const resStudent = await fetch(`${SUPABASE_URL}/rest/v1/students?id=eq.${studentId}&select=profile_id`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
-    const student: any = (await resStudent.json())[0];
+    const studentArr = (await resStudent.json()) as any[];
+    const student = studentArr[0];
 
     if (student?.profile_id) {
       await createNotification({
@@ -254,7 +256,8 @@ router.put('/grades/:gradeId', async (req, res, next) => {
       headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
       body: JSON.stringify(updateBody)
     });
-    const data: any = (await resUpdate.json())[0];
+    const dataArr = (await resUpdate.json()) as any[];
+    const data = dataArr[0];
 
     if (!resUpdate.ok || !data) throw new AppError('Grade not found or not authorized', 404);
 
@@ -298,7 +301,7 @@ router.get('/assignments', async (req, res, next) => {
     if (subjectId) url += `&subject_id=eq.${subjectId}`;
 
     const resData = await fetch(url, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
-    const data: any[] = await resData.json();
+    const data = (await resData.json()) as any[];
 
     if (!resData.ok) throw new AppError('Failed to fetch assignments', 500);
 
@@ -338,7 +341,8 @@ router.post('/assignments', async (req, res, next) => {
         max_score:   maxScore ? Number(maxScore) : null,
       })
     });
-    const data: any = (await resInsert.json())[0];
+    const dataArr = (await resInsert.json()) as any[];
+    const data = dataArr[0];
 
     if (!resInsert.ok) throw new AppError(`Failed to create assignment`, 500);
 
@@ -374,7 +378,8 @@ router.put('/assignments/:assignmentId', async (req, res, next) => {
       headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
       body: JSON.stringify(updateBody)
     });
-    const data: any = (await resUpdate.json())[0];
+    const dataArr = (await resUpdate.json()) as any[];
+    const data = dataArr[0];
 
     if (!resUpdate.ok || !data) throw new AppError('Assignment not found or not authorized', 404);
 
@@ -411,12 +416,13 @@ router.get('/assignments/:assignmentId/submissions', async (req, res, next) => {
 
     // Vérifier que le devoir appartient à l'enseignant
     const resCheck = await fetch(`${SUPABASE_URL}/rest/v1/assignments?id=eq.${assignmentId}&teacher_id=eq.${teacherId}&select=id`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
-    const assignment: any = (await resCheck.json())[0];
+    const checkArr = (await resCheck.json()) as any[];
+    const assignment = checkArr[0];
 
     if (!assignment) throw new AppError('Assignment not found or not authorized', 404);
 
     const resData = await fetch(`${SUPABASE_URL}/rest/v1/submissions?assignment_id=eq.${assignmentId}&select=*,students:student_id(id,student_number,profiles:profile_id(first_name,last_name))`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
-    const data: any[] = await resData.json();
+    const data = (await resData.json()) as any[];
 
     if (!resData.ok) throw new AppError('Failed to fetch submissions', 500);
 
@@ -441,7 +447,8 @@ router.patch('/submissions/:submissionId/grade', async (req, res, next) => {
       headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
       body: JSON.stringify({ score: Number(score), feedback: feedback || null, status: 'graded' })
     });
-    const data: any = (await resUpdate.json())[0];
+    const dataArr = (await resUpdate.json()) as any[];
+    const data = dataArr[0];
 
     if (!resUpdate.ok) throw new AppError('Failed to grade submission', 500);
 
@@ -479,7 +486,7 @@ router.post('/attendance', async (req, res, next) => {
       headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates,return=representation' },
       body: JSON.stringify(rows)
     });
-    const data: any[] = await resUpsert.json();
+    const data = (await resUpsert.json()) as any[];
 
     if (!resUpsert.ok) throw new AppError(`Failed to save attendance`, 500);
 
@@ -487,11 +494,12 @@ router.post('/attendance', async (req, res, next) => {
     const absents = records.filter((r: any) => r.status === 'absent');
     for (const absent of absents) {
       const resStudent = await fetch(`${SUPABASE_URL}/rest/v1/students?id=eq.${absent.studentId}&select=id,profile_id`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
-      const student: any = (await resStudent.json())[0];
+      const studentArr = (await resStudent.json()) as any[];
+      const student = studentArr[0];
 
       if (student) {
         const resParents = await fetch(`${SUPABASE_URL}/rest/v1/parent_student?student_id=eq.${student.id}&select=parents:parent_id(profile_id)`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
-        const parentLinks: any[] = await resParents.json();
+        const parentLinks = (await resParents.json()) as any[];
 
         const parentProfileIds = (parentLinks || [])
           .map((pl: any) => extractFirstItem(pl.parents)?.profile_id)
@@ -527,7 +535,7 @@ router.get('/announcements', async (req, res, next) => {
     if (classId) url += `&class_id=eq.${classId}`;
 
     const resData = await fetch(url, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
-    const data: any[] = await resData.json();
+    const data = (await resData.json()) as any[];
 
     if (!resData.ok) throw new AppError('Failed to fetch announcements', 500);
 
@@ -555,7 +563,8 @@ router.post('/announcements', async (req, res, next) => {
         target_role: targetRole || null,
       })
     });
-    const data: any = (await resInsert.json())[0];
+    const dataArr = (await resInsert.json()) as any[];
+    const data = dataArr[0];
 
     if (!resInsert.ok) throw new AppError(`Failed to create announcement`, 500);
 
@@ -608,7 +617,7 @@ router.get('/messages/conversations', async (req, res, next) => {
       `${SUPABASE_URL}/rest/v1/messages?or=(sender_id.eq.${req.user!.id},receiver_id.eq.${req.user!.id})&select=id,sender_id,receiver_id,content,created_at,is_read,sender:sender_id(first_name,last_name,avatar_url),receiver:receiver_id(first_name,last_name,avatar_url)&order=created_at.desc`,
       { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
     );
-    const data: any[] = await resData.json();
+    const data = (await resData.json()) as any[];
 
     if (!resData.ok) throw new AppError('Failed to fetch conversations', 500);
 
@@ -628,7 +637,7 @@ router.get('/messages/:userId', async (req, res, next) => {
       `${SUPABASE_URL}/rest/v1/messages?or=(and(sender_id.eq.${myId},receiver_id.eq.${userId}),and(sender_id.eq.${userId},receiver_id.eq.${myId}))&select=*&order=created_at`,
       { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
     );
-    const data: any[] = await resData.json();
+    const data = (await resData.json()) as any[];
 
     if (!resData.ok) throw new AppError('Failed to fetch messages', 500);
 
@@ -662,7 +671,8 @@ router.post('/messages', async (req, res, next) => {
         is_read:     false,
       })
     });
-    const data: any = (await resInsert.json())[0];
+    const dataArr = (await resInsert.json()) as any[];
+    const data = dataArr[0];
 
     if (!resInsert.ok) throw new AppError(`Failed to send message`, 500);
 
@@ -690,12 +700,14 @@ router.get('/profile', async (req, res, next) => {
     const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
     const resProfile = await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${req.user!.id}&select=*`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
-    const profile: any = (await resProfile.json())[0];
+    const profileArr = (await resProfile.json()) as any[];
+    const profile = profileArr[0];
 
     if (!resProfile.ok || !profile) throw new AppError('Profile not found', 404);
 
     const resTeacher = await fetch(`${SUPABASE_URL}/rest/v1/teachers?profile_id=eq.${req.user!.id}&select=*`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
-    const teacher: any = (await resTeacher.json())[0];
+    const teacherArr = (await resTeacher.json()) as any[];
+    const teacher = teacherArr[0];
 
     res.json(successResponse({ ...profile, teacherData: teacher || null }));
   } catch (err) { next(err); }
@@ -725,7 +737,8 @@ router.patch('/profile', async (req, res, next) => {
       headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
       body: JSON.stringify(updates)
     });
-    const data: any = (await resUpdate.json())[0];
+    const dataArr = (await resUpdate.json()) as any[];
+    const data = dataArr[0];
 
     if (!resUpdate.ok) throw new AppError('Failed to update profile', 500);
 
