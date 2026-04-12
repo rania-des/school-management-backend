@@ -4,28 +4,36 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
 
-console.log('🔵 === APP.TS LOADING ===');
-
 dotenv.config();
-
-console.log('🔵 SUPABASE_URL:', process.env.SUPABASE_URL ? '✅ Defined' : '❌ Missing');
-console.log('🔵 SUPABASE_SERVICE_ROLE_KEY:', process.env.SUPABASE_SERVICE_ROLE_KEY ? '✅ Defined' : '❌ Missing');
 
 import { globalRateLimit, authRateLimit } from './middleware/rateLimit.middleware';
 import { errorHandler, notFound } from './middleware/error.middleware';
 
 // Routes
-import authRoutes from './modules/auth/auth.routes';
-import teacherRoutes from './modules/teacher/teacher.routes';
+import authRoutes         from './modules/auth/auth.routes';
+import teacherRoutes      from './modules/teacher/teacher.routes';
+import studentRoutes      from './modules/student/student.routes';
+import parentRoutes       from './modules/parent/parent.routes';
+import adminRoutes        from './modules/admin/admin.routes';
+import gradesRoutes       from './modules/grades/grades.routes';
+import assignmentsRoutes  from './modules/assignments/assignments.routes';
+import attendanceRoutes   from './modules/attendance/attendance.routes';
+import scheduleRoutes     from './modules/schedule/schedule.routes';
+import messagesRoutes     from './modules/messages/messages.routes';
+import announcementsRoutes from './modules/announcements/announcements.routes';
+import paymentsRoutes     from './modules/payments/payments.routes';
+import canteenRoutes      from './modules/canteen/canteen.routes';
+import meetingsRoutes     from './modules/meetings/meetings.routes';
+import usersRoutes        from './modules/users/users.routes';
+import analyticsRoutes    from './modules/analytics/analytics.routes';
+import dbRoutes           from './routes/db.routes';
 
 const app = express();
 app.set('trust proxy', 1);
 
 // ==================== MIDDLEWARE ====================
 
-app.use(helmet({
-  crossOriginResourcePolicy: { policy: 'cross-origin' },
-}));
+app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 
 app.use(cors({
   origin: function (origin, callback) {
@@ -43,7 +51,6 @@ app.use(cors({
     ) {
       callback(null, true);
     } else {
-      console.log('CORS blocked origin:', origin);
       callback(null, true);
     }
   },
@@ -72,14 +79,23 @@ app.get('/health', (_req, res) => {
 
 const API = '/api/v1';
 
-console.log('🔵 Mounting routes at:', API);
-
-app.use(`${API}/auth`, authRateLimit, authRoutes);
-app.use(`${API}/teacher`, teacherRoutes);
-
-console.log('🔵 Routes mounted:');
-console.log('   - POST /api/v1/auth/login');
-console.log('   - GET /api/v1/teacher/classes');
+app.use(`${API}/auth`,          authRateLimit, authRoutes);
+app.use(`${API}/teacher`,       teacherRoutes);
+app.use(`${API}/student`,       studentRoutes);
+app.use(`${API}/parent`,        parentRoutes);
+app.use(`${API}/admin`,         adminRoutes);
+app.use(`${API}/grades`,        gradesRoutes);
+app.use(`${API}/assignments`,   assignmentsRoutes);
+app.use(`${API}/attendance`,    attendanceRoutes);
+app.use(`${API}/schedule`,      scheduleRoutes);
+app.use(`${API}/messages`,      messagesRoutes);
+app.use(`${API}/announcements`, announcementsRoutes);
+app.use(`${API}/payments`,      paymentsRoutes);
+app.use(`${API}/canteen`,       canteenRoutes);
+app.use(`${API}/meetings`,      meetingsRoutes);
+app.use(`${API}/users`,         usersRoutes);
+app.use(`${API}/analytics`,     analyticsRoutes);
+app.use(`${API}/db`,            dbRoutes);
 
 app.get(`${API}/ping`, (_req, res) => {
   res.json({ message: 'pong', timestamp: new Date().toISOString() });
@@ -89,7 +105,5 @@ app.get(`${API}/ping`, (_req, res) => {
 
 app.use(notFound);
 app.use(errorHandler);
-
-console.log('🔵 === APP.TS LOADED SUCCESSFULLY ===');
 
 export default app;
