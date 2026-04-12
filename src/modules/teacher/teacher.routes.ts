@@ -308,33 +308,29 @@ router.delete('/grades/:gradeId', async (req, res, next) => {
 });
 
 // =============================================================================
-// DEVOIRS (ASSIGNMENTS)
+// DEVOIRS (ASSIGNMENTS) - VERSION CORRIGÉE SANS JOINS
 // =============================================================================
 
-// GET /api/v1/teacher/assignments?classId=&subjectId=
+// GET /api/v1/teacher/assignments?classId=&subjectId=&type=
 router.get('/assignments', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
-    const { classId, subjectId } = req.query;
+    const { classId, subjectId, type } = req.query;
     const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
-
-    let url = `${SUPABASE_URL}/rest/v1/assignments?teacher_id=eq.${teacherId}&select=*,subjects:subject_id(name),classes:class_id(name)&order=due_date`;
+    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
+    
+    let url = `${SUPABASE_URL}/rest/v1/assignments?teacher_id=eq.${teacherId}&select=*&order=due_date`;
     if (classId)   url += `&class_id=eq.${classId}`;
     if (subjectId) url += `&subject_id=eq.${subjectId}`;
-
-    const resData = await fetch(url, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+    if (type)      url += `&type=eq.${type}`;
+    
+    const resData = await fetch(url, { headers: H });
     const data = (await resData.json()) as any[];
-
+    
     if (!resData.ok) throw new AppError('Failed to fetch assignments', 500);
-
-    const formatted = (data || []).map((a: any) => ({
-      ...a,
-      subject: extractFirstItem(a.subjects),
-      class:   extractFirstItem(a.classes),
-    }));
-
-    res.json(successResponse(formatted));
+    
+    res.json(successResponse(data || []));
   } catch (err) { next(err); }
 });
 
@@ -345,6 +341,7 @@ router.post('/assignments', async (req, res, next) => {
     const { classId, subjectId, title, description, dueDate, type, maxScore } = req.body;
     const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
+    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' };
 
     if (!classId || !subjectId || !title || !dueDate) {
       throw new AppError('classId, subjectId, title et dueDate sont requis', 400);
@@ -352,7 +349,7 @@ router.post('/assignments', async (req, res, next) => {
 
     const resInsert = await fetch(`${SUPABASE_URL}/rest/v1/assignments`, {
       method: 'POST',
-      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
+      headers: H,
       body: JSON.stringify({
         teacher_id:  teacherId,
         class_id:    classId,
@@ -392,13 +389,14 @@ router.put('/assignments/:assignmentId', async (req, res, next) => {
     const { title, description, dueDate, type, maxScore } = req.body;
     const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
+    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' };
 
     const updateBody: any = { title, description, due_date: dueDate, type };
     if (maxScore !== undefined) updateBody.max_score = Number(maxScore);
 
     const resUpdate = await fetch(`${SUPABASE_URL}/rest/v1/assignments?id=eq.${assignmentId}&teacher_id=eq.${teacherId}`, {
       method: 'PATCH',
-      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
+      headers: H,
       body: JSON.stringify(updateBody)
     });
     const dataArr = (await resUpdate.json()) as any[];
@@ -417,10 +415,11 @@ router.delete('/assignments/:assignmentId', async (req, res, next) => {
     const { assignmentId } = req.params;
     const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
+    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
 
     const resDelete = await fetch(`${SUPABASE_URL}/rest/v1/assignments?id=eq.${assignmentId}&teacher_id=eq.${teacherId}`, {
       method: 'DELETE',
-      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
+      headers: H
     });
 
     if (!resDelete.ok) throw new AppError('Failed to delete assignment', 500);
@@ -436,15 +435,16 @@ router.get('/assignments/:assignmentId/submissions', async (req, res, next) => {
     const { assignmentId } = req.params;
     const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
+    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
 
     // Vérifier que le devoir appartient à l'enseignant
-    const resCheck = await fetch(`${SUPABASE_URL}/rest/v1/assignments?id=eq.${assignmentId}&teacher_id=eq.${teacherId}&select=id`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+    const resCheck = await fetch(`${SUPABASE_URL}/rest/v1/assignments?id=eq.${assignmentId}&teacher_id=eq.${teacherId}&select=id`, { headers: H });
     const checkArr = (await resCheck.json()) as any[];
     const assignment = checkArr[0];
 
     if (!assignment) throw new AppError('Assignment not found or not authorized', 404);
 
-    const resData = await fetch(`${SUPABASE_URL}/rest/v1/submissions?assignment_id=eq.${assignmentId}&select=*,students:student_id(id,student_number,profiles:profile_id(first_name,last_name))`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+    const resData = await fetch(`${SUPABASE_URL}/rest/v1/submissions?assignment_id=eq.${assignmentId}&select=*,students:student_id(id,student_number,profiles:profile_id(first_name,last_name))`, { headers: H });
     const data = (await resData.json()) as any[];
 
     if (!resData.ok) throw new AppError('Failed to fetch submissions', 500);
@@ -462,12 +462,13 @@ router.patch('/submissions/:submissionId/grade', async (req, res, next) => {
     const { score, feedback } = req.body;
     const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
+    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' };
 
     if (score === undefined) throw new AppError('score est requis', 400);
 
     const resUpdate = await fetch(`${SUPABASE_URL}/rest/v1/submissions?id=eq.${submissionId}`, {
       method: 'PATCH',
-      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
+      headers: H,
       body: JSON.stringify({ score: Number(score), feedback: feedback || null, status: 'graded' })
     });
     const dataArr = (await resUpdate.json()) as any[];
@@ -490,6 +491,7 @@ router.post('/attendance', async (req, res, next) => {
     const { records } = req.body;
     const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
+    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates,return=representation' };
 
     if (!Array.isArray(records) || records.length === 0) {
       throw new AppError('records[] est requis', 400);
@@ -506,7 +508,7 @@ router.post('/attendance', async (req, res, next) => {
 
     const resUpsert = await fetch(`${SUPABASE_URL}/rest/v1/attendance?on_conflict=student_id,class_id,date`, {
       method: 'POST',
-      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates,return=representation' },
+      headers: H,
       body: JSON.stringify(rows)
     });
     const data = (await resUpsert.json()) as any[];
@@ -553,11 +555,12 @@ router.get('/announcements', async (req, res, next) => {
     const { classId } = req.query;
     const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
+    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
 
     let url = `${SUPABASE_URL}/rest/v1/announcements?or=(author_id.eq.${req.user!.id},target_role.eq.teacher,target_role.is.null)&order=created_at.desc`;
     if (classId) url += `&class_id=eq.${classId}`;
 
-    const resData = await fetch(url, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+    const resData = await fetch(url, { headers: H });
     const data = (await resData.json()) as any[];
 
     if (!resData.ok) throw new AppError('Failed to fetch announcements', 500);
@@ -572,12 +575,13 @@ router.post('/announcements', async (req, res, next) => {
     const { title, content, classId, targetRole } = req.body;
     const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
+    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' };
 
     if (!title || !content) throw new AppError('title et content sont requis', 400);
 
     const resInsert = await fetch(`${SUPABASE_URL}/rest/v1/announcements`, {
       method: 'POST',
-      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
+      headers: H,
       body: JSON.stringify({
         author_id:   req.user!.id,
         title,
@@ -614,10 +618,11 @@ router.delete('/announcements/:announcementId', async (req, res, next) => {
     const { announcementId } = req.params;
     const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
+    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
 
     const resDelete = await fetch(`${SUPABASE_URL}/rest/v1/announcements?id=eq.${announcementId}&author_id=eq.${req.user!.id}`, {
       method: 'DELETE',
-      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
+      headers: H
     });
 
     if (!resDelete.ok) throw new AppError('Failed to delete announcement', 500);
@@ -627,7 +632,7 @@ router.delete('/announcements/:announcementId', async (req, res, next) => {
 });
 
 // =============================================================================
-// MESSAGERIE - VERSION CORRIGÉE AVEC CONVERSATIONS
+// MESSAGERIE
 // =============================================================================
 
 // GET /api/v1/teacher/messages/conversations
