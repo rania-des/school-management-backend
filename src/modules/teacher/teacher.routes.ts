@@ -22,12 +22,11 @@ function extractFirstItem(data: any): any {
 async function getTeacherId(profileId: string): Promise<string> {
   const SUPABASE_URL = process.env.SUPABASE_URL!;
   const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-  
   const res = await fetch(
     `${SUPABASE_URL}/rest/v1/teachers?profile_id=eq.${profileId}&select=id`,
     { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
   );
-  const data = (await res.json()) as any[];
+  const data = await res.json() as any[];
   if (!data?.[0]?.id) throw new AppError('Teacher not found', 404);
   return data[0].id;
 }
