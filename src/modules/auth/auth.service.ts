@@ -1,4 +1,4 @@
-console.log('🔥🔥🔥 AUTH SERVICE V4 🔥🔥🔥');
+console.log('🔥🔥🔥 AUTH SERVICE V5 🔥🔥🔥');
 
 import { createClient } from '@supabase/supabase-js';
 import { AppError } from '../../middleware/error.middleware';
@@ -11,40 +11,39 @@ const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 console.log('🔑 AUTH SERVICE - ANON:', SUPABASE_ANON_KEY ? '✅ ' + SUPABASE_ANON_KEY.substring(0, 15) + '...' : '❌');
 console.log('🔑 AUTH SERVICE - SERVICE:', SUPABASE_SERVICE_KEY ? '✅ ' + SUPABASE_SERVICE_KEY.substring(0, 15) + '...' : '❌');
 
-// Public client for auth (login, signup)
-const supabasePublic = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
-// Admin client for admin operations (createUser, deleteUser, etc.)
+// Admin client — used only for admin operations (createUser, deleteUser, updateUser)
 const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
   auth: { autoRefreshToken: false, persistSession: false },
 });
 
 /**
  * Fetch profile using the user's own access token.
- * This bypasses any service_role key compatibility issues with new Supabase projects.
+ * This works regardless of which Supabase key format is in use (legacy JWT or new sb_* keys).
  */
-async function fetchProfileWithUserToken(userId: string, accessToken: string) {
+async function fetchProfile(userId: string, accessToken: string) {
   const res = await fetch(
     `${SUPABASE_URL}/rest/v1/profiles?id=eq.${userId}&select=*`,
     {
       headers: {
-        'apikey': SUPABASE_ANON_KEY,          // anon key is always the JWT legacy key
-        'Authorization': `Bearer ${accessToken}`, // user's own JWT — always works
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
       },
     }
   );
 
   console.log('🔵 Profile fetch status:', res.status);
-  const data = await res.json();
-  console.log('🔵 Profiles:', JSON.stringify(data));
 
   if (!res.ok) {
-    console.log('🔴 Profile fetch error:', JSON.stringify(data));
+    const err = await res.json();
+    console.log('🔴 Profile fetch error:', JSON.stringify(err));
     return null;
   }
 
-  return Array.isArray(data) ? data[0] ?? null : null;
+  const data = await res.json();
+  const profile = Array.isArray(data) ? data[0] ?? null : null;
+  console.log('🔵 Profile found:', !!profile, profile ? `role=${profile.role}` : '');
+  return profile;
 }
 
 export class AuthService {
@@ -53,24 +52,35 @@ export class AuthService {
     console.log('🔵 === LOGIN ATTEMPT ===');
     console.log('🔵 Email:', email);
 
-    const { data, error } = await supabasePublic.auth.signInWithPassword({
-      email: email.trim().toLowerCase(),
-      password,
+    // Step 1: Authenticate with Supabase
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+      method: 'POST',
+      headers: {
+        'apikey': SUPABASE_ANON_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
     });
 
-    console.log('🔵 Auth error:', error?.message || 'aucun');
-    console.log('🔵 Session:', !!data?.session);
+    console.log('🔵 Auth status:', res.status);
 
-    if (error || !data?.session) {
+    if (!res.ok) {
+      console.log('🔴 Auth failed');
       throw new AppError('Email ou mot de passe incorrect', 401);
     }
 
-    const userId = data.user.id;
-    const accessToken = data.session.access_token;
+    const session = await res.json();
+
+    if (!session?.access_token || !session?.user?.id) {
+      throw new AppError('Email ou mot de passe incorrect', 401);
+    }
+
+    const userId = session.user.id;
+    const accessToken = session.access_token;
     console.log('🔵 User ID:', userId);
 
-    // Use user's own token — bypasses service_role key issues entirely
-    const profile = await fetchProfileWithUserToken(userId, accessToken);
+    // Step 2: Fetch profile using user's own token
+    const profile = await fetchProfile(userId, accessToken);
 
     if (!profile) {
       console.log('🔴 No profile found for user:', userId);
@@ -81,11 +91,11 @@ export class AuthService {
 
     return {
       accessToken,
-      refreshToken: data.session.refresh_token,
-      expiresIn: data.session.expires_in,
+      refreshToken: session.refresh_token,
+      expiresIn: session.expires_in,
       user: {
         id: userId,
-        email: data.user.email,
+        email: session.user.email,
         role: profile.role,
         firstName: profile.first_name,
         lastName: profile.last_name,
@@ -146,12 +156,22 @@ export class AuthService {
   }
 
   async refreshToken(refreshToken: string) {
-    const { data, error } = await supabasePublic.auth.refreshSession({ refresh_token: refreshToken });
-    if (error || !data.session) throw new AppError('Token de rafraîchissement invalide', 401);
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+      method: 'POST',
+      headers: {
+        'apikey': SUPABASE_ANON_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    });
+
+    if (!res.ok) throw new AppError('Token de rafraîchissement invalide', 401);
+
+    const session = await res.json();
     return {
-      accessToken: data.session.access_token,
-      refreshToken: data.session.refresh_token,
-      expiresIn: data.session.expires_in,
+      accessToken: session.access_token,
+      refreshToken: session.refresh_token,
+      expiresIn: session.expires_in,
     };
   }
 
@@ -162,13 +182,20 @@ export class AuthService {
 
   async forgotPassword(email: string) {
     const redirectUrl = `${process.env.FRONTEND_URL}/reset-password`;
-    const { error } = await supabasePublic.auth.resetPasswordForEmail(email, { redirectTo: redirectUrl });
-    if (error) throw new AppError("Échec de l'envoi de l'email de réinitialisation", 500);
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/recover`, {
+      method: 'POST',
+      headers: {
+        'apikey': SUPABASE_ANON_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ email, gotrue_meta_security: {}, redirect_to: redirectUrl }),
+    });
+    if (!res.ok) throw new AppError("Échec de l'envoi de l'email de réinitialisation", 500);
     return { message: 'Email de réinitialisation envoyé' };
   }
 
   async resetPasswordWithToken(token: string, newPassword: string) {
-    const { data, error } = await supabasePublic.auth.getUser(token);
+    const { data, error } = await supabaseAdmin.auth.getUser(token);
     if (error || !data.user) throw new AppError('Token invalide ou expiré', 401);
     const { error: updateError } = await supabaseAdmin.auth.admin.updateUserById(data.user.id, { password: newPassword });
     if (updateError) throw new AppError('Échec de la réinitialisation du mot de passe', 500);
@@ -182,21 +209,26 @@ export class AuthService {
   }
 
   async getMe(userId: string, accessToken: string) {
-    const profile = await fetchProfileWithUserToken(userId, accessToken);
+    const profile = await fetchProfile(userId, accessToken);
     if (!profile) throw new AppError('Profil non trouvé', 404);
 
     let roleData = null;
     let roleId = null;
 
-    if (profile.role === 'teacher') {
-      const { data } = await supabaseAdmin.from('teachers').select('*').eq('profile_id', userId).single();
-      roleData = data; roleId = data?.id;
-    } else if (profile.role === 'student') {
-      const { data } = await supabaseAdmin.from('students').select('*, classes(name, levels(name))').eq('profile_id', userId).single();
-      roleData = data; roleId = data?.id;
-    } else if (profile.role === 'parent') {
-      const { data } = await supabaseAdmin.from('parents').select('*, parent_student(*, students(*, profiles(first_name, last_name), classes(name)))').eq('profile_id', userId).single();
-      roleData = data; roleId = data?.id;
+    try {
+      if (profile.role === 'teacher') {
+        const { data } = await supabaseAdmin.from('teachers').select('*').eq('profile_id', userId).single();
+        roleData = data; roleId = data?.id;
+      } else if (profile.role === 'student') {
+        const { data } = await supabaseAdmin.from('students').select('*, classes(name, levels(name))').eq('profile_id', userId).single();
+        roleData = data; roleId = data?.id;
+      } else if (profile.role === 'parent') {
+        const { data } = await supabaseAdmin.from('parents').select('*, parent_student(*, students(*, profiles(first_name, last_name), classes(name)))').eq('profile_id', userId).single();
+        roleData = data; roleId = data?.id;
+      }
+    } catch (e) {
+      // Role record may not exist for manually created users — not a fatal error
+      console.log('⚠️ Role record not found for', profile.role, '- non-fatal');
     }
 
     return {
