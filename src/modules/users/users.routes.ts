@@ -43,7 +43,8 @@ const updateProfileSchema = z.object({
 // GET /users/me/profile
 router.get('/me/profile', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { data } = await sbGet(`profiles?id=eq.${req.user!.id}`);
+    // Table : profiles (confirmé dans la liste des tables)
+    const { data } = await sbGet(`profiles?id=eq.${req.user!.id}&select=*`);
     const user = Array.isArray(data) ? data[0] : null;
     if (!user) throw new AppError('Profile not found', 404);
     return res.json(successResponse(user));
@@ -54,14 +55,14 @@ router.get('/me/profile', async (req: Request, res: Response, next: NextFunction
 router.patch('/me/profile', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = updateProfileSchema.parse(req.body);
-    const updateData: Record<string, unknown> = {};
-    if (body.firstName) updateData.first_name = body.firstName;
-    if (body.lastName) updateData.last_name = body.lastName;
-    if (body.phone !== undefined) updateData.phone = body.phone;
-    if (body.address !== undefined) updateData.address = body.address;
-    if (body.gender) updateData.gender = body.gender;
-    if (body.dateOfBirth) updateData.date_of_birth = body.dateOfBirth;
-    const { data, ok } = await sbPatch(`profiles?id=eq.${req.user!.id}`, updateData);
+    const upd: Record<string, unknown> = {};
+    if (body.firstName) upd.first_name = body.firstName;
+    if (body.lastName) upd.last_name = body.lastName;
+    if (body.phone !== undefined) upd.phone = body.phone;
+    if (body.address !== undefined) upd.address = body.address;
+    if (body.gender) upd.gender = body.gender;
+    if (body.dateOfBirth) upd.date_of_birth = body.dateOfBirth;
+    const { data, ok } = await sbPatch(`profiles?id=eq.${req.user!.id}`, upd);
     if (!ok) throw new AppError('Failed to update profile', 500);
     return res.json(successResponse(data, 'Profile updated successfully'));
   } catch (err) { return next(err); }
@@ -71,20 +72,20 @@ router.patch('/me/profile', async (req: Request, res: Response, next: NextFuncti
 router.patch('/:id/profile', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = updateProfileSchema.parse(req.body);
-    const updateData: Record<string, unknown> = {};
-    if (body.firstName) updateData.first_name = body.firstName;
-    if (body.lastName) updateData.last_name = body.lastName;
-    if (body.phone !== undefined) updateData.phone = body.phone;
-    if (body.address !== undefined) updateData.address = body.address;
-    if (body.gender) updateData.gender = body.gender;
-    if (body.dateOfBirth) updateData.date_of_birth = body.dateOfBirth;
-    const { data, ok } = await sbPatch(`profiles?id=eq.${req.params.id}`, updateData);
+    const upd: Record<string, unknown> = {};
+    if (body.firstName) upd.first_name = body.firstName;
+    if (body.lastName) upd.last_name = body.lastName;
+    if (body.phone !== undefined) upd.phone = body.phone;
+    if (body.address !== undefined) upd.address = body.address;
+    if (body.gender) upd.gender = body.gender;
+    if (body.dateOfBirth) upd.date_of_birth = body.dateOfBirth;
+    const { data, ok } = await sbPatch(`profiles?id=eq.${req.params.id}`, upd);
     if (!ok || !data) throw new AppError('User not found', 404);
     return res.json(successResponse(data, 'Profile updated'));
   } catch (err) { return next(err); }
 });
 
-// PATCH /users/:id/role (admin)
+// PATCH /users/:id/role
 router.patch('/:id/role', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { role } = z.object({
@@ -96,12 +97,13 @@ router.patch('/:id/role', authorize('admin'), async (req: Request, res: Response
   } catch (err) { return next(err); }
 });
 
-// GET /users - admin + teacher
+// GET /users  — admin voit tout, teacher voit seulement students
 router.get('/', authorize('admin', 'teacher'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { page, limit, offset } = getPagination(req);
     const { role, search } = req.query;
 
+    // Table : profiles
     let url = `profiles?select=*&order=created_at.desc&offset=${offset}&limit=${limit}`;
 
     if (role) {
@@ -117,24 +119,47 @@ router.get('/', authorize('admin', 'teacher'), async (req: Request, res: Respons
     const { data } = await sbGet(url);
     const arr = Array.isArray(data) ? data : [];
 
-    return res.json(paginate(arr, arr.length, { page, limit, offset }));
+    // Enrichir chaque user avec son class_id si student
+    const enriched = await Promise.all(arr.map(async (user: any) => {
+      if (user.role === 'student') {
+        const { data: st } = await sbGet(`students?profile_id=eq.${user.id}&select=id,class_id`);
+        const student = Array.isArray(st) ? st[0] : null;
+        if (student?.class_id) {
+          const { data: cls } = await sbGet(`classes?id=eq.${student.class_id}&select=name`);
+          const className = Array.isArray(cls) ? cls[0]?.name : null;
+          return { ...user, roleId: student.id, roleData: { classes: { name: className } } };
+        }
+        return { ...user, roleId: student?.id || null };
+      }
+      if (user.role === 'teacher') {
+        const { data: te } = await sbGet(`teachers?profile_id=eq.${user.id}&select=id`);
+        const teacher = Array.isArray(te) ? te[0] : null;
+        return { ...user, roleId: teacher?.id || null };
+      }
+      if (user.role === 'parent') {
+        const { data: pa } = await sbGet(`parents?profile_id=eq.${user.id}&select=id`);
+        const parent = Array.isArray(pa) ? pa[0] : null;
+        return { ...user, roleId: parent?.id || null };
+      }
+      return user;
+    }));
+
+    return res.json(paginate(enriched, enriched.length, { page, limit, offset }));
   } catch (err) { return next(err); }
 });
 
 // GET /users/:id
 router.get('/:id', authorize('admin', 'teacher'), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { data } = await sbGet(`profiles?id=eq.${req.params.id}`);
+    const { data } = await sbGet(`profiles?id=eq.${req.params.id}&select=*`);
     const user = Array.isArray(data) ? data[0] : null;
     if (!user) throw new AppError('User not found', 404);
-    if (req.user!.role === 'teacher' && user.role !== 'student') {
-      throw new AppError('Forbidden', 403);
-    }
+    if (req.user!.role === 'teacher' && user.role !== 'student') throw new AppError('Forbidden', 403);
     return res.json(successResponse(user));
   } catch (err) { return next(err); }
 });
 
-// PATCH /users/:id/status (admin)
+// PATCH /users/:id/status
 router.patch('/:id/status', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { isActive } = z.object({ isActive: z.boolean() }).parse(req.body);

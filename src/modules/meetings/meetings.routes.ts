@@ -58,24 +58,26 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     let url = `meetings?select=*&order=scheduled_at.asc&offset=${offset}&limit=${limit}`;
 
     if (req.user!.role === 'teacher') {
+      // teachers table → id via profile_id
       const { data: teachers } = await sbGet(`teachers?profile_id=eq.${req.user!.id}&select=id`);
-      const teacherId = Array.isArray(teachers) && teachers[0]?.id;
-      if (teacherId) url += `&teacher_id=eq.${teacherId}`;
+      const tid = Array.isArray(teachers) ? teachers[0]?.id : null;
+      if (tid) url += `&teacher_id=eq.${tid}`;
+      else return res.json(paginate([], 0, { page, limit, offset }));
     } else if (req.user!.role === 'parent') {
+      // parents table → id via profile_id
       const { data: parents } = await sbGet(`parents?profile_id=eq.${req.user!.id}&select=id`);
-      const parentId = Array.isArray(parents) && parents[0]?.id;
-      if (parentId) url += `&parent_id=eq.${parentId}`;
+      const pid = Array.isArray(parents) ? parents[0]?.id : null;
+      if (pid) url += `&parent_id=eq.${pid}`;
+      else return res.json(paginate([], 0, { page, limit, offset }));
     }
+    // admin → voit tout
 
     if (status) url += `&status=eq.${status}`;
 
     const { data } = await sbGet(url);
     const arr = Array.isArray(data) ? data : [];
-
     return res.json(paginate(arr, arr.length, { page, limit, offset }));
-  } catch (err) {
-    return next(err);
-  }
+  } catch (err) { return next(err); }
 });
 
 // POST /meetings
@@ -87,17 +89,15 @@ router.post('/', authorize('parent', 'teacher', 'admin'), async (req: Request, r
       parent_id: body.parentId,
       student_id: body.studentId,
       requested_by: req.user!.id,
-      scheduled_at: body.scheduledAt,
+      scheduled_at: body.scheduledAt || null,
       duration_minutes: body.durationMinutes,
-      location: body.location,
-      notes: body.notes,
+      location: body.location || null,
+      notes: body.notes || null,
       status: 'requested',
     });
     if (!ok || !data) throw new AppError('Failed to create meeting request', 500);
     return res.status(201).json(successResponse(data));
-  } catch (err) {
-    return next(err);
-  }
+  } catch (err) { return next(err); }
 });
 
 // PATCH /meetings/:id/confirm
@@ -107,17 +107,14 @@ router.patch('/:id/confirm', authorize('teacher', 'admin'), async (req: Request,
       scheduledAt: z.string(),
       location: z.string().optional(),
     }).parse(req.body);
-
     const { data, ok } = await sbPatch(`meetings?id=eq.${req.params.id}`, {
       status: 'confirmed',
       scheduled_at: scheduledAt,
-      location,
+      location: location || null,
     });
     if (!ok || !data) throw new AppError('Meeting not found', 404);
     return res.json(successResponse(data));
-  } catch (err) {
-    return next(err);
-  }
+  } catch (err) { return next(err); }
 });
 
 // PATCH /meetings/:id/cancel
@@ -126,13 +123,11 @@ router.patch('/:id/cancel', async (req: Request, res: Response, next: NextFuncti
     const { reason } = z.object({ reason: z.string().optional() }).parse(req.body);
     const { data, ok } = await sbPatch(`meetings?id=eq.${req.params.id}`, {
       status: 'cancelled',
-      cancellation_reason: reason,
+      cancellation_reason: reason || null,
     });
     if (!ok || !data) throw new AppError('Meeting not found', 404);
     return res.json(successResponse(data));
-  } catch (err) {
-    return next(err);
-  }
+  } catch (err) { return next(err); }
 });
 
 // PATCH /meetings/:id/complete
@@ -141,9 +136,7 @@ router.patch('/:id/complete', authorize('teacher', 'admin'), async (req: Request
     const { data, ok } = await sbPatch(`meetings?id=eq.${req.params.id}`, { status: 'completed' });
     if (!ok || !data) throw new AppError('Meeting not found', 404);
     return res.json(successResponse(data));
-  } catch (err) {
-    return next(err);
-  }
+  } catch (err) { return next(err); }
 });
 
 export default router;

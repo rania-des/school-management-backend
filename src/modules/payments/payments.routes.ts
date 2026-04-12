@@ -62,14 +62,18 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
 
     if (req.user!.role === 'student') {
       const { data: students } = await sbGet(`students?profile_id=eq.${req.user!.id}&select=id`);
-      const studentId = Array.isArray(students) && students[0]?.id;
-      if (studentId) url += `&student_id=eq.${studentId}`;
+      const sid = Array.isArray(students) ? students[0]?.id : null;
+      if (sid) url += `&student_id=eq.${sid}`;
+      else return res.json(paginate([], 0, { page, limit, offset }));
     } else if (req.user!.role === 'parent') {
       const { data: parents } = await sbGet(`parents?profile_id=eq.${req.user!.id}&select=id`);
-      const parentId = Array.isArray(parents) && parents[0]?.id;
-      const { data: children } = await sbGet(`parent_student?parent_id=eq.${parentId}&select=student_id`);
-      const childIds = (Array.isArray(children) ? children : []).map((c: any) => c.student_id).filter(Boolean);
-      if (childIds.length > 0) url += `&student_id=in.(${childIds.join(',')})`;
+      const parentId = Array.isArray(parents) ? parents[0]?.id : null;
+      if (parentId) {
+        const { data: links } = await sbGet(`parent_student?parent_id=eq.${parentId}&select=student_id`);
+        const childIds = (Array.isArray(links) ? links : []).map((c: any) => c.student_id).filter(Boolean);
+        if (childIds.length > 0) url += `&student_id=in.(${childIds.join(',')})`;
+        else return res.json(paginate([], 0, { page, limit, offset }));
+      }
     }
 
     if (status) url += `&status=eq.${status}`;
@@ -77,11 +81,8 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
 
     const { data } = await sbGet(url);
     const arr = Array.isArray(data) ? data : [];
-
     return res.json(paginate(arr, arr.length, { page, limit, offset }));
-  } catch (err) {
-    return next(err);
-  }
+  } catch (err) { return next(err); }
 });
 
 // GET /payments/stats
@@ -90,23 +91,19 @@ router.get('/stats', authorize('admin'), async (req: Request, res: Response, nex
     const { academicYearId } = req.query;
     let url = `payments?select=amount,status,type`;
     if (academicYearId) url += `&academic_year_id=eq.${academicYearId}`;
-
     const { data } = await sbGet(url);
     const arr = Array.isArray(data) ? data : [];
-
     const stats = { total: 0, paid: 0, pending: 0, overdue: 0, byType: {} as Record<string, number> };
     arr.forEach((p: any) => {
-      stats.total += parseFloat(p.amount);
-      if (p.status === 'paid') stats.paid += parseFloat(p.amount);
-      if (p.status === 'pending') stats.pending += parseFloat(p.amount);
-      if (p.status === 'overdue') stats.overdue += parseFloat(p.amount);
-      stats.byType[p.type] = (stats.byType[p.type] || 0) + parseFloat(p.amount);
+      const amt = parseFloat(p.amount) || 0;
+      stats.total += amt;
+      if (p.status === 'paid') stats.paid += amt;
+      if (p.status === 'pending') stats.pending += amt;
+      if (p.status === 'overdue') stats.overdue += amt;
+      stats.byType[p.type] = (stats.byType[p.type] || 0) + amt;
     });
-
     return res.json(successResponse(stats));
-  } catch (err) {
-    return next(err);
-  }
+  } catch (err) { return next(err); }
 });
 
 // POST /payments
@@ -117,16 +114,14 @@ router.post('/', authorize('admin'), async (req: Request, res: Response, next: N
       student_id: body.studentId,
       type: body.type,
       amount: body.amount,
-      description: body.description,
-      due_date: body.dueDate,
-      academic_year_id: body.academicYearId,
+      description: body.description || null,
+      due_date: body.dueDate || null,
+      academic_year_id: body.academicYearId || null,
       status: 'pending',
     });
     if (!ok || !data) throw new AppError('Failed to create payment', 500);
     return res.status(201).json(successResponse(data));
-  } catch (err) {
-    return next(err);
-  }
+  } catch (err) { return next(err); }
 });
 
 // PATCH /payments/:id/mark-paid
@@ -138,9 +133,7 @@ router.patch('/:id/mark-paid', authorize('admin'), async (req: Request, res: Res
     });
     if (!ok || !data) throw new AppError('Payment not found', 404);
     return res.json(successResponse(data));
-  } catch (err) {
-    return next(err);
-  }
+  } catch (err) { return next(err); }
 });
 
 // PATCH /payments/:id/status
@@ -152,9 +145,7 @@ router.patch('/:id/status', authorize('admin'), async (req: Request, res: Respon
     const { data, ok } = await sbPatch(`payments?id=eq.${req.params.id}`, { status });
     if (!ok || !data) throw new AppError('Payment not found', 404);
     return res.json(successResponse(data));
-  } catch (err) {
-    return next(err);
-  }
+  } catch (err) { return next(err); }
 });
 
 // DELETE /payments/:id
@@ -162,9 +153,7 @@ router.delete('/:id', authorize('admin'), async (req: Request, res: Response, ne
   try {
     await sbDelete(`payments?id=eq.${req.params.id}`);
     return res.status(204).send();
-  } catch (err) {
-    return next(err);
-  }
+  } catch (err) { return next(err); }
 });
 
 export default router;
