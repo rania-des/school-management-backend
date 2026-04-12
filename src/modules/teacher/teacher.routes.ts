@@ -22,11 +22,13 @@ function extractFirstItem(data: any): any {
 async function getTeacherId(profileId: string): Promise<string> {
   const SUPABASE_URL = process.env.SUPABASE_URL!;
   const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-  const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/teachers?profile_id=eq.${profileId}&select=id`,
+  const url = `${SUPABASE_URL}/rest/v1/teachers?profile_id=eq.${profileId}&select=id`;
+  console.log('🔍 getTeacherId URL:', url);
+  const res = await fetch(url,
     { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
   );
   const data = (await res.json()) as any[];
+  console.log('🔍 getTeacherId data:', JSON.stringify(data));
   if (!data?.[0]?.id) throw new AppError('Teacher not found', 404);
   return data[0].id;
 }
@@ -38,7 +40,9 @@ async function getTeacherId(profileId: string): Promise<string> {
 // GET /api/v1/teacher/classes — classes assignées à l'enseignant
 router.get('/classes', async (req, res, next) => {
   try {
+    console.log('🔍 /classes - req.user:', req.user?.id);
     const teacherId = await getTeacherId(req.user!.id);
+    console.log('🔍 /classes - teacherId:', teacherId);
 
     const SUPABASE_URL = process.env.SUPABASE_URL!;
     const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -48,6 +52,7 @@ router.get('/classes', async (req, res, next) => {
       { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
     );
     const slots = (await resSlots.json()) as any[];
+    console.log('🔍 /classes - slots count:', slots?.length);
 
     if (!resSlots.ok) throw new AppError('Failed to fetch teacher classes', 500);
 
@@ -67,7 +72,10 @@ router.get('/classes', async (req, res, next) => {
     }
 
     res.json(successResponse(Array.from(classMap.values())));
-  } catch (err) { next(err); }
+  } catch (err) { 
+    console.error('🔍 /classes - error:', err);
+    next(err); 
+  }
 });
 
 // GET /api/v1/teacher/students/:classId — élèves d'une classe
