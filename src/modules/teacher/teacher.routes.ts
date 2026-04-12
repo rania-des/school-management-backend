@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import { authenticate, authorize } from '../../middleware/auth.middleware';
-import { supabaseAdmin } from '../../config/supabase';
 import { AppError } from '../../middleware/error.middleware';
 import { successResponse } from '../../utils/pagination';
 import { createNotification, createBulkNotifications, getClassStudentProfileIds } from '../../utils/notifications';
@@ -19,15 +18,18 @@ function extractFirstItem(data: any): any {
   return data;
 }
 
-// Helper pour récupérer l'ID teacher depuis le profile_id
+// Helper pour récupérer l'ID teacher depuis le profile_id (utilisation de fetch direct)
 async function getTeacherId(profileId: string): Promise<string> {
-  const { data: teacher } = await supabaseAdmin
-    .from('teachers')
-    .select('id')
-    .eq('profile_id', profileId)
-    .single();
-  if (!teacher) throw new AppError('Teacher not found', 404);
-  return teacher.id;
+  const SUPABASE_URL = process.env.SUPABASE_URL!;
+  const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+  
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/teachers?profile_id=eq.${profileId}&select=id`,
+    { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
+  );
+  const data = await res.json();
+  if (!data?.[0]?.id) throw new AppError('Teacher not found', 404);
+  return data[0].id;
 }
 
 // =============================================================================
@@ -39,18 +41,16 @@ router.get('/classes', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
 
-    const { data: slots, error } = await supabaseAdmin
-      .from('schedule_slots')
-      .select(`
-        class_id,
-        subject_id,
-        classes:class_id(id, name),
-        subjects:subject_id(id, name)
-      `)
-      .eq('teacher_id', teacherId)
-      .eq('is_active', true);
+    const SUPABASE_URL = process.env.SUPABASE_URL!;
+    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
-    if (error) throw new AppError('Failed to fetch teacher classes', 500);
+    const resSlots = await fetch(
+      `${SUPABASE_URL}/rest/v1/schedule_slots?teacher_id=eq.${teacherId}&is_active=eq.true&select=class_id,subject_id,classes:class_id(id,name),subjects:subject_id(id,name)`,
+      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
+    );
+    const slots = await resSlots.json();
+
+    if (!resSlots.ok) throw new AppError('Failed to fetch teacher classes', 500);
 
     const classMap = new Map();
     for (const slot of slots || []) {
@@ -75,18 +75,16 @@ router.get('/classes', async (req, res, next) => {
 router.get('/students/:classId', async (req, res, next) => {
   try {
     const { classId } = req.params;
+    const SUPABASE_URL = process.env.SUPABASE_URL!;
+    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
-    const { data: students, error } = await supabaseAdmin
-      .from('students')
-      .select(`
-        id,
-        profile_id,
-        student_number,
-        profiles:profile_id(first_name, last_name, email, avatar_url)
-      `)
-      .eq('class_id', classId);
+    const resStudents = await fetch(
+      `${SUPABASE_URL}/rest/v1/students?class_id=eq.${classId}&select=id,profile_id,student_number,profiles:profile_id(first_name,last_name,email,avatar_url)`,
+      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
+    );
+    const students = await resStudents.json();
 
-    if (error) throw new AppError('Failed to fetch students', 500);
+    if (!resStudents.ok) throw new AppError('Failed to fetch students', 500);
 
     const formatted = (students || []).map((s: any) => ({
       id:             s.id,
@@ -107,20 +105,16 @@ router.get('/students/:classId', async (req, res, next) => {
 router.get('/schedule', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
+    const SUPABASE_URL = process.env.SUPABASE_URL!;
+    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
-    const { data: slots, error } = await supabaseAdmin
-      .from('schedule_slots')
-      .select(`
-        *,
-        subjects:subject_id(name, color),
-        classes:class_id(name)
-      `)
-      .eq('teacher_id', teacherId)
-      .eq('is_active', true)
-      .order('day_of_week')
-      .order('start_time');
+    const resSlots = await fetch(
+      `${SUPABASE_URL}/rest/v1/schedule_slots?teacher_id=eq.${teacherId}&is_active=eq.true&select=*,subjects:subject_id(name,color),classes:class_id(name)&order=day_of_week,start_time`,
+      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
+    );
+    const slots = await resSlots.json();
 
-    if (error) throw new AppError('Failed to fetch schedule', 500);
+    if (!resSlots.ok) throw new AppError('Failed to fetch schedule', 500);
 
     const formatted = (slots || []).map((slot: any) => ({
       ...slot,
@@ -140,27 +134,23 @@ router.get('/schedule', async (req, res, next) => {
 router.get('/stats', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
+    const SUPABASE_URL = process.env.SUPABASE_URL!;
+    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
     const [classesRes, assignmentsRes, gradesRes] = await Promise.all([
-      supabaseAdmin
-        .from('schedule_slots')
-        .select('class_id', { count: 'exact', head: true })
-        .eq('teacher_id', teacherId)
-        .eq('is_active', true),
-      supabaseAdmin
-        .from('assignments')
-        .select('id', { count: 'exact', head: true })
-        .eq('teacher_id', teacherId),
-      supabaseAdmin
-        .from('grades')
-        .select('id', { count: 'exact', head: true })
-        .eq('teacher_id', teacherId),
+      fetch(`${SUPABASE_URL}/rest/v1/schedule_slots?teacher_id=eq.${teacherId}&is_active=eq.true&select=class_id`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }),
+      fetch(`${SUPABASE_URL}/rest/v1/assignments?teacher_id=eq.${teacherId}&select=id`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }),
+      fetch(`${SUPABASE_URL}/rest/v1/grades?teacher_id=eq.${teacherId}&select=id`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }),
     ]);
 
+    const classesData = await classesRes.json();
+    const assignmentsData = await assignmentsRes.json();
+    const gradesData = await gradesRes.json();
+
     res.json(successResponse({
-      totalClasses:     classesRes.count     || 0,
-      totalAssignments: assignmentsRes.count || 0,
-      totalGrades:      gradesRes.count      || 0,
+      totalClasses:     classesData?.length || 0,
+      totalAssignments: assignmentsData?.length || 0,
+      totalGrades:      gradesData?.length || 0,
     }));
   } catch (err) { next(err); }
 });
@@ -174,22 +164,18 @@ router.get('/grades', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
     const { classId, subjectId, period } = req.query;
+    const SUPABASE_URL = process.env.SUPABASE_URL!;
+    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
-    let query = supabaseAdmin
-      .from('grades')
-      .select(`
-        *,
-        students:student_id(id, student_number, profiles:profile_id(first_name, last_name)),
-        subjects:subject_id(name)
-      `)
-      .eq('teacher_id', teacherId);
+    let url = `${SUPABASE_URL}/rest/v1/grades?teacher_id=eq.${teacherId}&select=*,students:student_id(id,student_number,profiles:profile_id(first_name,last_name)),subjects:subject_id(name)&order=created_at.desc`;
+    if (classId)   url += `&class_id=eq.${classId}`;
+    if (subjectId) url += `&subject_id=eq.${subjectId}`;
+    if (period)    url += `&period=eq.${period}`;
 
-    if (classId)   query = query.eq('class_id',   classId as string);
-    if (subjectId) query = query.eq('subject_id', subjectId as string);
-    if (period)    query = query.eq('period',      period as string);
+    const resData = await fetch(url, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+    const data = await resData.json();
 
-    const { data, error } = await query.order('created_at', { ascending: false });
-    if (error) throw new AppError('Failed to fetch grades', 500);
+    if (!resData.ok) throw new AppError('Failed to fetch grades', 500);
 
     const formatted = (data || []).map((g: any) => ({
       ...g,
@@ -206,14 +192,17 @@ router.post('/grades', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
     const { studentId, classId, subjectId, value, maxValue, period, type, comment } = req.body;
+    const SUPABASE_URL = process.env.SUPABASE_URL!;
+    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
     if (!studentId || !classId || !subjectId || value === undefined || !period) {
       throw new AppError('studentId, classId, subjectId, value et period sont requis', 400);
     }
 
-    const { data, error } = await supabaseAdmin
-      .from('grades')
-      .insert({
+    const resInsert = await fetch(`${SUPABASE_URL}/rest/v1/grades`, {
+      method: 'POST',
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
+      body: JSON.stringify({
         teacher_id: teacherId,
         student_id: studentId,
         class_id:   classId,
@@ -224,17 +213,14 @@ router.post('/grades', async (req, res, next) => {
         type:       type || 'exam',
         comment:    comment || null,
       })
-      .select()
-      .single();
+    });
+    const data = await resInsert.json();
 
-    if (error) throw new AppError(`Failed to create grade: ${error.message}`, 500);
+    if (!resInsert.ok) throw new AppError(`Failed to create grade: ${JSON.stringify(data)}`, 500);
 
     // Notification à l'élève
-    const { data: student } = await supabaseAdmin
-      .from('students')
-      .select('profile_id')
-      .eq('id', studentId)
-      .single();
+    const resStudent = await fetch(`${SUPABASE_URL}/rest/v1/students?id=eq.${studentId}&select=profile_id`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+    const student = (await resStudent.json())?.[0];
 
     if (student?.profile_id) {
       await createNotification({
@@ -253,20 +239,24 @@ router.post('/grades', async (req, res, next) => {
 // PUT /api/v1/teacher/grades/:gradeId — modifier une note
 router.put('/grades/:gradeId', async (req, res, next) => {
   try {
-    const teacherId         = await getTeacherId(req.user!.id);
-    const { gradeId }       = req.params;
+    const teacherId = await getTeacherId(req.user!.id);
+    const { gradeId } = req.params;
     const { value, maxValue, comment } = req.body;
+    const SUPABASE_URL = process.env.SUPABASE_URL!;
+    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
-    const { data, error } = await supabaseAdmin
-      .from('grades')
-      .update({ value: Number(value), max_value: maxValue ? Number(maxValue) : undefined, comment })
-      .eq('id', gradeId)
-      .eq('teacher_id', teacherId)
-      .select()
-      .single();
+    const updateBody: any = { comment };
+    if (value    !== undefined) updateBody.value     = Number(value);
+    if (maxValue !== undefined) updateBody.max_value = Number(maxValue);
 
-    if (error) throw new AppError('Failed to update grade', 500);
-    if (!data)  throw new AppError('Grade not found or not authorized', 404);
+    const resUpdate = await fetch(`${SUPABASE_URL}/rest/v1/grades?id=eq.${gradeId}&teacher_id=eq.${teacherId}`, {
+      method: 'PATCH',
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
+      body: JSON.stringify(updateBody)
+    });
+    const data = (await resUpdate.json())?.[0];
+
+    if (!resUpdate.ok || !data) throw new AppError('Grade not found or not authorized', 404);
 
     res.json(successResponse(data, 'Note modifiée avec succès'));
   } catch (err) { next(err); }
@@ -275,16 +265,17 @@ router.put('/grades/:gradeId', async (req, res, next) => {
 // DELETE /api/v1/teacher/grades/:gradeId
 router.delete('/grades/:gradeId', async (req, res, next) => {
   try {
-    const teacherId   = await getTeacherId(req.user!.id);
+    const teacherId = await getTeacherId(req.user!.id);
     const { gradeId } = req.params;
+    const SUPABASE_URL = process.env.SUPABASE_URL!;
+    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
-    const { error } = await supabaseAdmin
-      .from('grades')
-      .delete()
-      .eq('id', gradeId)
-      .eq('teacher_id', teacherId);
+    const resDelete = await fetch(`${SUPABASE_URL}/rest/v1/grades?id=eq.${gradeId}&teacher_id=eq.${teacherId}`, {
+      method: 'DELETE',
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
+    });
 
-    if (error) throw new AppError('Failed to delete grade', 500);
+    if (!resDelete.ok) throw new AppError('Failed to delete grade', 500);
 
     res.json(successResponse(null, 'Note supprimée'));
   } catch (err) { next(err); }
@@ -299,21 +290,17 @@ router.get('/assignments', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
     const { classId, subjectId } = req.query;
+    const SUPABASE_URL = process.env.SUPABASE_URL!;
+    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
-    let query = supabaseAdmin
-      .from('assignments')
-      .select(`
-        *,
-        subjects:subject_id(name),
-        classes:class_id(name)
-      `)
-      .eq('teacher_id', teacherId);
+    let url = `${SUPABASE_URL}/rest/v1/assignments?teacher_id=eq.${teacherId}&select=*,subjects:subject_id(name),classes:class_id(name)&order=due_date`;
+    if (classId)   url += `&class_id=eq.${classId}`;
+    if (subjectId) url += `&subject_id=eq.${subjectId}`;
 
-    if (classId)   query = query.eq('class_id',   classId as string);
-    if (subjectId) query = query.eq('subject_id', subjectId as string);
+    const resData = await fetch(url, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+    const data = await resData.json();
 
-    const { data, error } = await query.order('due_date', { ascending: true });
-    if (error) throw new AppError('Failed to fetch assignments', 500);
+    if (!resData.ok) throw new AppError('Failed to fetch assignments', 500);
 
     const formatted = (data || []).map((a: any) => ({
       ...a,
@@ -330,14 +317,17 @@ router.post('/assignments', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
     const { classId, subjectId, title, description, dueDate, type, maxScore } = req.body;
+    const SUPABASE_URL = process.env.SUPABASE_URL!;
+    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
     if (!classId || !subjectId || !title || !dueDate) {
       throw new AppError('classId, subjectId, title et dueDate sont requis', 400);
     }
 
-    const { data, error } = await supabaseAdmin
-      .from('assignments')
-      .insert({
+    const resInsert = await fetch(`${SUPABASE_URL}/rest/v1/assignments`, {
+      method: 'POST',
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
+      body: JSON.stringify({
         teacher_id:  teacherId,
         class_id:    classId,
         subject_id:  subjectId,
@@ -347,10 +337,10 @@ router.post('/assignments', async (req, res, next) => {
         type:        type || 'homework',
         max_score:   maxScore ? Number(maxScore) : null,
       })
-      .select()
-      .single();
+    });
+    const data = (await resInsert.json())?.[0];
 
-    if (error) throw new AppError(`Failed to create assignment: ${error.message}`, 500);
+    if (!resInsert.ok) throw new AppError(`Failed to create assignment: ${JSON.stringify(data)}`, 500);
 
     // Notification en masse à tous les élèves de la classe
     const studentProfileIds = await getClassStudentProfileIds(classId);
@@ -370,20 +360,23 @@ router.post('/assignments', async (req, res, next) => {
 // PUT /api/v1/teacher/assignments/:assignmentId
 router.put('/assignments/:assignmentId', async (req, res, next) => {
   try {
-    const teacherId           = await getTeacherId(req.user!.id);
-    const { assignmentId }    = req.params;
+    const teacherId = await getTeacherId(req.user!.id);
+    const { assignmentId } = req.params;
     const { title, description, dueDate, type, maxScore } = req.body;
+    const SUPABASE_URL = process.env.SUPABASE_URL!;
+    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
-    const { data, error } = await supabaseAdmin
-      .from('assignments')
-      .update({ title, description, due_date: dueDate, type, max_score: maxScore ? Number(maxScore) : undefined })
-      .eq('id', assignmentId)
-      .eq('teacher_id', teacherId)
-      .select()
-      .single();
+    const updateBody: any = { title, description, due_date: dueDate, type };
+    if (maxScore !== undefined) updateBody.max_score = Number(maxScore);
 
-    if (error) throw new AppError('Failed to update assignment', 500);
-    if (!data)  throw new AppError('Assignment not found or not authorized', 404);
+    const resUpdate = await fetch(`${SUPABASE_URL}/rest/v1/assignments?id=eq.${assignmentId}&teacher_id=eq.${teacherId}`, {
+      method: 'PATCH',
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
+      body: JSON.stringify(updateBody)
+    });
+    const data = (await resUpdate.json())?.[0];
+
+    if (!resUpdate.ok || !data) throw new AppError('Assignment not found or not authorized', 404);
 
     res.json(successResponse(data, 'Devoir modifié'));
   } catch (err) { next(err); }
@@ -392,16 +385,17 @@ router.put('/assignments/:assignmentId', async (req, res, next) => {
 // DELETE /api/v1/teacher/assignments/:assignmentId
 router.delete('/assignments/:assignmentId', async (req, res, next) => {
   try {
-    const teacherId        = await getTeacherId(req.user!.id);
+    const teacherId = await getTeacherId(req.user!.id);
     const { assignmentId } = req.params;
+    const SUPABASE_URL = process.env.SUPABASE_URL!;
+    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
-    const { error } = await supabaseAdmin
-      .from('assignments')
-      .delete()
-      .eq('id', assignmentId)
-      .eq('teacher_id', teacherId);
+    const resDelete = await fetch(`${SUPABASE_URL}/rest/v1/assignments?id=eq.${assignmentId}&teacher_id=eq.${teacherId}`, {
+      method: 'DELETE',
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
+    });
 
-    if (error) throw new AppError('Failed to delete assignment', 500);
+    if (!resDelete.ok) throw new AppError('Failed to delete assignment', 500);
 
     res.json(successResponse(null, 'Devoir supprimé'));
   } catch (err) { next(err); }
@@ -410,33 +404,23 @@ router.delete('/assignments/:assignmentId', async (req, res, next) => {
 // GET /api/v1/teacher/assignments/:assignmentId/submissions — soumissions d'un devoir
 router.get('/assignments/:assignmentId/submissions', async (req, res, next) => {
   try {
-    const teacherId        = await getTeacherId(req.user!.id);
+    const teacherId = await getTeacherId(req.user!.id);
     const { assignmentId } = req.params;
+    const SUPABASE_URL = process.env.SUPABASE_URL!;
+    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
     // Vérifier que le devoir appartient à l'enseignant
-    const { data: assignment } = await supabaseAdmin
-      .from('assignments')
-      .select('id')
-      .eq('id', assignmentId)
-      .eq('teacher_id', teacherId)
-      .single();
+    const resCheck = await fetch(`${SUPABASE_URL}/rest/v1/assignments?id=eq.${assignmentId}&teacher_id=eq.${teacherId}&select=id`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+    const assignment = (await resCheck.json())?.[0];
 
     if (!assignment) throw new AppError('Assignment not found or not authorized', 404);
 
-    const { data, error } = await supabaseAdmin
-      .from('submissions')
-      .select(`
-        *,
-        students:student_id(id, student_number, profiles:profile_id(first_name, last_name))
-      `)
-      .eq('assignment_id', assignmentId);
+    const resData = await fetch(`${SUPABASE_URL}/rest/v1/submissions?assignment_id=eq.${assignmentId}&select=*,students:student_id(id,student_number,profiles:profile_id(first_name,last_name))`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+    const data = await resData.json();
 
-    if (error) throw new AppError('Failed to fetch submissions', 500);
+    if (!resData.ok) throw new AppError('Failed to fetch submissions', 500);
 
-    const formatted = (data || []).map((s: any) => ({
-      ...s,
-      student: extractFirstItem(s.students),
-    }));
+    const formatted = (data || []).map((s: any) => ({ ...s, student: extractFirstItem(s.students) }));
 
     res.json(successResponse(formatted));
   } catch (err) { next(err); }
@@ -447,17 +431,19 @@ router.patch('/submissions/:submissionId/grade', async (req, res, next) => {
   try {
     const { submissionId } = req.params;
     const { score, feedback } = req.body;
+    const SUPABASE_URL = process.env.SUPABASE_URL!;
+    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
     if (score === undefined) throw new AppError('score est requis', 400);
 
-    const { data, error } = await supabaseAdmin
-      .from('submissions')
-      .update({ score: Number(score), feedback: feedback || null, status: 'graded' })
-      .eq('id', submissionId)
-      .select()
-      .single();
+    const resUpdate = await fetch(`${SUPABASE_URL}/rest/v1/submissions?id=eq.${submissionId}`, {
+      method: 'PATCH',
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
+      body: JSON.stringify({ score: Number(score), feedback: feedback || null, status: 'graded' })
+    });
+    const data = (await resUpdate.json())?.[0];
 
-    if (error) throw new AppError('Failed to grade submission', 500);
+    if (!resUpdate.ok) throw new AppError('Failed to grade submission', 500);
 
     res.json(successResponse(data, 'Soumission notée'));
   } catch (err) { next(err); }
@@ -467,43 +453,13 @@ router.patch('/submissions/:submissionId/grade', async (req, res, next) => {
 // PRÉSENCES (ATTENDANCE)
 // =============================================================================
 
-// GET /api/v1/teacher/attendance?classId=&date=
-router.get('/attendance', async (req, res, next) => {
-  try {
-    const teacherId = await getTeacherId(req.user!.id);
-    const { classId, date, startDate, endDate } = req.query;
-
-    let query = supabaseAdmin
-      .from('attendance')
-      .select(`
-        *,
-        students:student_id(id, student_number, profiles:profile_id(first_name, last_name))
-      `)
-      .eq('teacher_id', teacherId);
-
-    if (classId)   query = query.eq('class_id', classId as string);
-    if (date)      query = query.eq('date', date as string);
-    if (startDate) query = query.gte('date', startDate as string);
-    if (endDate)   query = query.lte('date', endDate as string);
-
-    const { data, error } = await query.order('date', { ascending: false });
-    if (error) throw new AppError('Failed to fetch attendance', 500);
-
-    const formatted = (data || []).map((a: any) => ({
-      ...a,
-      student: extractFirstItem(a.students),
-    }));
-
-    res.json(successResponse(formatted));
-  } catch (err) { next(err); }
-});
-
 // POST /api/v1/teacher/attendance — enregistrer les présences (tableau)
 router.post('/attendance', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
-    // records = [{ studentId, classId, status, date, note? }]
     const { records } = req.body;
+    const SUPABASE_URL = process.env.SUPABASE_URL!;
+    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
     if (!Array.isArray(records) || records.length === 0) {
       throw new AppError('records[] est requis', 400);
@@ -513,32 +469,29 @@ router.post('/attendance', async (req, res, next) => {
       teacher_id: teacherId,
       student_id: r.studentId,
       class_id:   r.classId,
-      status:     r.status,   // 'present' | 'absent' | 'late'
+      status:     r.status,
       date:       r.date,
       note:       r.note || null,
     }));
 
-    const { data, error } = await supabaseAdmin
-      .from('attendance')
-      .upsert(rows, { onConflict: 'student_id,class_id,date' })
-      .select();
+    const resUpsert = await fetch(`${SUPABASE_URL}/rest/v1/attendance?on_conflict=student_id,class_id,date`, {
+      method: 'POST',
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates,return=representation' },
+      body: JSON.stringify(rows)
+    });
+    const data = await resUpsert.json();
 
-    if (error) throw new AppError(`Failed to save attendance: ${error.message}`, 500);
+    if (!resUpsert.ok) throw new AppError(`Failed to save attendance: ${JSON.stringify(data)}`, 500);
 
     // Notifications aux parents pour les absences
     const absents = records.filter((r: any) => r.status === 'absent');
     for (const absent of absents) {
-      const { data: student } = await supabaseAdmin
-        .from('students')
-        .select('id, profile_id')
-        .eq('id', absent.studentId)
-        .single();
+      const resStudent = await fetch(`${SUPABASE_URL}/rest/v1/students?id=eq.${absent.studentId}&select=id,profile_id`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+      const student = (await resStudent.json())?.[0];
 
       if (student) {
-        const { data: parentLinks } = await supabaseAdmin
-          .from('parent_student')
-          .select('parents(profile_id)')
-          .eq('student_id', student.id);
+        const resParents = await fetch(`${SUPABASE_URL}/rest/v1/parent_student?student_id=eq.${student.id}&select=parents:parent_id(profile_id)`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+        const parentLinks = await resParents.json();
 
         const parentProfileIds = (parentLinks || [])
           .map((pl: any) => extractFirstItem(pl.parents)?.profile_id)
@@ -567,16 +520,16 @@ router.post('/attendance', async (req, res, next) => {
 router.get('/announcements', async (req, res, next) => {
   try {
     const { classId } = req.query;
+    const SUPABASE_URL = process.env.SUPABASE_URL!;
+    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
-    let query = supabaseAdmin
-      .from('announcements')
-      .select('*')
-      .or(`author_id.eq.${req.user!.id},target_role.eq.teacher,target_role.is.null`);
+    let url = `${SUPABASE_URL}/rest/v1/announcements?or=(author_id.eq.${req.user!.id},target_role.eq.teacher,target_role.is.null)&order=created_at.desc`;
+    if (classId) url += `&class_id=eq.${classId}`;
 
-    if (classId) query = query.eq('class_id', classId as string);
+    const resData = await fetch(url, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+    const data = await resData.json();
 
-    const { data, error } = await query.order('created_at', { ascending: false });
-    if (error) throw new AppError('Failed to fetch announcements', 500);
+    if (!resData.ok) throw new AppError('Failed to fetch announcements', 500);
 
     res.json(successResponse(data || []));
   } catch (err) { next(err); }
@@ -586,22 +539,25 @@ router.get('/announcements', async (req, res, next) => {
 router.post('/announcements', async (req, res, next) => {
   try {
     const { title, content, classId, targetRole } = req.body;
+    const SUPABASE_URL = process.env.SUPABASE_URL!;
+    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
     if (!title || !content) throw new AppError('title et content sont requis', 400);
 
-    const { data, error } = await supabaseAdmin
-      .from('announcements')
-      .insert({
+    const resInsert = await fetch(`${SUPABASE_URL}/rest/v1/announcements`, {
+      method: 'POST',
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
+      body: JSON.stringify({
         author_id:   req.user!.id,
         title,
         content,
         class_id:    classId    || null,
         target_role: targetRole || null,
       })
-      .select()
-      .single();
+    });
+    const data = (await resInsert.json())?.[0];
 
-    if (error) throw new AppError(`Failed to create announcement: ${error.message}`, 500);
+    if (!resInsert.ok) throw new AppError(`Failed to create announcement: ${JSON.stringify(data)}`, 500);
 
     // Si une classe est ciblée, notifier les élèves
     if (classId) {
@@ -624,14 +580,15 @@ router.post('/announcements', async (req, res, next) => {
 router.delete('/announcements/:announcementId', async (req, res, next) => {
   try {
     const { announcementId } = req.params;
+    const SUPABASE_URL = process.env.SUPABASE_URL!;
+    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
-    const { error } = await supabaseAdmin
-      .from('announcements')
-      .delete()
-      .eq('id', announcementId)
-      .eq('author_id', req.user!.id);
+    const resDelete = await fetch(`${SUPABASE_URL}/rest/v1/announcements?id=eq.${announcementId}&author_id=eq.${req.user!.id}`, {
+      method: 'DELETE',
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
+    });
 
-    if (error) throw new AppError('Failed to delete announcement', 500);
+    if (!resDelete.ok) throw new AppError('Failed to delete announcement', 500);
 
     res.json(successResponse(null, 'Annonce supprimée'));
   } catch (err) { next(err); }
@@ -644,22 +601,16 @@ router.delete('/announcements/:announcementId', async (req, res, next) => {
 // GET /api/v1/teacher/messages/conversations
 router.get('/messages/conversations', async (req, res, next) => {
   try {
-    const { data, error } = await supabaseAdmin
-      .from('messages')
-      .select(`
-        id,
-        sender_id,
-        receiver_id,
-        content,
-        created_at,
-        is_read,
-        sender:sender_id(first_name, last_name, avatar_url),
-        receiver:receiver_id(first_name, last_name, avatar_url)
-      `)
-      .or(`sender_id.eq.${req.user!.id},receiver_id.eq.${req.user!.id}`)
-      .order('created_at', { ascending: false });
+    const SUPABASE_URL = process.env.SUPABASE_URL!;
+    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
-    if (error) throw new AppError('Failed to fetch conversations', 500);
+    const resData = await fetch(
+      `${SUPABASE_URL}/rest/v1/messages?or=(sender_id.eq.${req.user!.id},receiver_id.eq.${req.user!.id})&select=id,sender_id,receiver_id,content,created_at,is_read,sender:sender_id(first_name,last_name,avatar_url),receiver:receiver_id(first_name,last_name,avatar_url)&order=created_at.desc`,
+      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
+    );
+    const data = await resData.json();
+
+    if (!resData.ok) throw new AppError('Failed to fetch conversations', 500);
 
     res.json(successResponse(data || []));
   } catch (err) { next(err); }
@@ -670,24 +621,23 @@ router.get('/messages/:userId', async (req, res, next) => {
   try {
     const { userId } = req.params;
     const myId       = req.user!.id;
+    const SUPABASE_URL = process.env.SUPABASE_URL!;
+    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
-    const { data, error } = await supabaseAdmin
-      .from('messages')
-      .select('*')
-      .or(
-        `and(sender_id.eq.${myId},receiver_id.eq.${userId}),and(sender_id.eq.${userId},receiver_id.eq.${myId})`
-      )
-      .order('created_at', { ascending: true });
+    const resData = await fetch(
+      `${SUPABASE_URL}/rest/v1/messages?or=(and(sender_id.eq.${myId},receiver_id.eq.${userId}),and(sender_id.eq.${userId},receiver_id.eq.${myId}))&select=*&order=created_at`,
+      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
+    );
+    const data = await resData.json();
 
-    if (error) throw new AppError('Failed to fetch messages', 500);
+    if (!resData.ok) throw new AppError('Failed to fetch messages', 500);
 
     // Marquer les messages reçus comme lus
-    await supabaseAdmin
-      .from('messages')
-      .update({ is_read: true })
-      .eq('receiver_id', myId)
-      .eq('sender_id', userId)
-      .eq('is_read', false);
+    await fetch(`${SUPABASE_URL}/rest/v1/messages?receiver_id=eq.${myId}&sender_id=eq.${userId}&is_read=eq.false`, {
+      method: 'PATCH',
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_read: true })
+    }).catch(() => {});
 
     res.json(successResponse(data || []));
   } catch (err) { next(err); }
@@ -697,27 +647,30 @@ router.get('/messages/:userId', async (req, res, next) => {
 router.post('/messages', async (req, res, next) => {
   try {
     const { receiverId, content } = req.body;
+    const SUPABASE_URL = process.env.SUPABASE_URL!;
+    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
     if (!receiverId || !content) throw new AppError('receiverId et content sont requis', 400);
 
-    const { data, error } = await supabaseAdmin
-      .from('messages')
-      .insert({
+    const resInsert = await fetch(`${SUPABASE_URL}/rest/v1/messages`, {
+      method: 'POST',
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
+      body: JSON.stringify({
         sender_id:   req.user!.id,
         receiver_id: receiverId,
         content,
         is_read:     false,
       })
-      .select()
-      .single();
+    });
+    const data = (await resInsert.json())?.[0];
 
-    if (error) throw new AppError(`Failed to send message: ${error.message}`, 500);
+    if (!resInsert.ok) throw new AppError(`Failed to send message: ${JSON.stringify(data)}`, 500);
 
     // Notification au destinataire
     await createNotification({
       recipientId: receiverId,
       type:        'message',
-      title:       `Message de ${req.user!.firstName || ''} ${req.user!.lastName || ''}`.trim(),
+      title:       `Nouveau message`,
       body:        content.substring(0, 100),
       data:        { messageId: data.id, senderId: req.user!.id },
     });
@@ -733,19 +686,16 @@ router.post('/messages', async (req, res, next) => {
 // GET /api/v1/teacher/profile
 router.get('/profile', async (req, res, next) => {
   try {
-    const { data: profile, error: profileError } = await supabaseAdmin
-      .from('profiles')
-      .select('*')
-      .eq('id', req.user!.id)
-      .single();
+    const SUPABASE_URL = process.env.SUPABASE_URL!;
+    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
-    if (profileError || !profile) throw new AppError('Profile not found', 404);
+    const resProfile = await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${req.user!.id}&select=*`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+    const profile = (await resProfile.json())?.[0];
 
-    const { data: teacher } = await supabaseAdmin
-      .from('teachers')
-      .select('*')
-      .eq('profile_id', req.user!.id)
-      .single();
+    if (!resProfile.ok || !profile) throw new AppError('Profile not found', 404);
+
+    const resTeacher = await fetch(`${SUPABASE_URL}/rest/v1/teachers?profile_id=eq.${req.user!.id}&select=*`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+    const teacher = (await resTeacher.json())?.[0];
 
     res.json(successResponse({ ...profile, teacherData: teacher || null }));
   } catch (err) { next(err); }
@@ -755,6 +705,8 @@ router.get('/profile', async (req, res, next) => {
 router.patch('/profile', async (req, res, next) => {
   try {
     const { firstName, lastName, phone, address, gender, avatarUrl } = req.body;
+    const SUPABASE_URL = process.env.SUPABASE_URL!;
+    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
     const updates: Record<string, any> = {};
     if (firstName !== undefined) updates.first_name  = firstName;
@@ -768,14 +720,14 @@ router.patch('/profile', async (req, res, next) => {
       throw new AppError('Aucune donnée à mettre à jour', 400);
     }
 
-    const { data, error } = await supabaseAdmin
-      .from('profiles')
-      .update(updates)
-      .eq('id', req.user!.id)
-      .select()
-      .single();
+    const resUpdate = await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${req.user!.id}`, {
+      method: 'PATCH',
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
+      body: JSON.stringify(updates)
+    });
+    const data = (await resUpdate.json())?.[0];
 
-    if (error) throw new AppError('Failed to update profile', 500);
+    if (!resUpdate.ok) throw new AppError('Failed to update profile', 500);
 
     res.json(successResponse(data, 'Profil mis à jour'));
   } catch (err) { next(err); }
