@@ -20,7 +20,6 @@ function extractFirstItem(data: any): any {
 }
 
 // Helper pour récupérer l'ID teacher depuis le profile_id
-// FIX: si la ligne n'existe pas encore dans la table teachers, on la crée automatiquement
 async function getTeacherId(profileId: string): Promise<string> {
   const { data: teacher } = await supabaseAdmin
     .from('teachers')
@@ -30,7 +29,6 @@ async function getTeacherId(profileId: string): Promise<string> {
 
   if (teacher) return teacher.id;
 
-  // Ligne manquante → on la crée à la volée
   const { data: created, error: createError } = await supabaseAdmin
     .from('teachers')
     .insert({ profile_id: profileId })
@@ -49,7 +47,6 @@ async function getTeacherId(profileId: string): Promise<string> {
 // CLASSES & STUDENTS
 // =============================================================================
 
-// GET /api/v1/teacher/classes — classes assignées à l'enseignant
 router.get('/classes', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
@@ -86,7 +83,6 @@ router.get('/classes', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// GET /api/v1/teacher/students/:classId — élèves d'une classe
 router.get('/students/:classId', async (req, res, next) => {
   try {
     const { classId } = req.params;
@@ -118,7 +114,6 @@ router.get('/students/:classId', async (req, res, next) => {
 // EMPLOI DU TEMPS
 // =============================================================================
 
-// GET /api/v1/teacher/schedule — emploi du temps de l'enseignant
 router.get('/schedule', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
@@ -148,43 +143,9 @@ router.get('/schedule', async (req, res, next) => {
 });
 
 // =============================================================================
-// STATISTIQUES
-// =============================================================================
-
-// GET /api/v1/teacher/stats — stats résumées
-router.get('/stats', async (req, res, next) => {
-  try {
-    const teacherId = await getTeacherId(req.user!.id);
-
-    const [classesRes, assignmentsRes, gradesRes] = await Promise.all([
-      supabaseAdmin
-        .from('schedule_slots')
-        .select('class_id', { count: 'exact', head: true })
-        .eq('teacher_id', teacherId)
-        .eq('is_active', true),
-      supabaseAdmin
-        .from('assignments')
-        .select('id', { count: 'exact', head: true })
-        .eq('teacher_id', teacherId),
-      supabaseAdmin
-        .from('grades')
-        .select('id', { count: 'exact', head: true })
-        .eq('teacher_id', teacherId),
-    ]);
-
-    res.json(successResponse({
-      totalClasses:     classesRes.count     || 0,
-      totalAssignments: assignmentsRes.count || 0,
-      totalGrades:      gradesRes.count      || 0,
-    }));
-  } catch (err) { next(err); }
-});
-
-// =============================================================================
 // NOTES (GRADES)
 // =============================================================================
 
-// GET /api/v1/teacher/grades?classId=&subjectId=&period=
 router.get('/grades', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
@@ -216,7 +177,6 @@ router.get('/grades', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// POST /api/v1/teacher/grades — ajouter une note
 router.post('/grades', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
@@ -244,7 +204,6 @@ router.post('/grades', async (req, res, next) => {
 
     if (error) throw new AppError(`Failed to create grade: ${error.message}`, 500);
 
-    // Notification à l'élève
     const { data: student } = await supabaseAdmin
       .from('students')
       .select('profile_id')
@@ -265,7 +224,6 @@ router.post('/grades', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// PUT /api/v1/teacher/grades/:gradeId — modifier une note
 router.put('/grades/:gradeId', async (req, res, next) => {
   try {
     const teacherId         = await getTeacherId(req.user!.id);
@@ -287,7 +245,6 @@ router.put('/grades/:gradeId', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// DELETE /api/v1/teacher/grades/:gradeId
 router.delete('/grades/:gradeId', async (req, res, next) => {
   try {
     const teacherId   = await getTeacherId(req.user!.id);
@@ -309,11 +266,10 @@ router.delete('/grades/:gradeId', async (req, res, next) => {
 // DEVOIRS (ASSIGNMENTS)
 // =============================================================================
 
-// GET /api/v1/teacher/assignments?classId=&subjectId=
 router.get('/assignments', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
-    const { classId, subjectId } = req.query;
+    const { classId, subjectId, type } = req.query;
 
     let query = supabaseAdmin
       .from('assignments')
@@ -326,6 +282,7 @@ router.get('/assignments', async (req, res, next) => {
 
     if (classId)   query = query.eq('class_id',   classId as string);
     if (subjectId) query = query.eq('subject_id', subjectId as string);
+    if (type)      query = query.eq('type',       type as string);
 
     const { data, error } = await query.order('due_date', { ascending: true });
     if (error) throw new AppError('Failed to fetch assignments', 500);
@@ -340,14 +297,18 @@ router.get('/assignments', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// POST /api/v1/teacher/assignments — créer un devoir
 router.post('/assignments', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
-    const { classId, subjectId, title, description, dueDate, type, maxScore } = req.body;
+    const { classId, subjectId, title, description, dueDate, type, fileData, fileName } = req.body;
 
-    if (!classId || !subjectId || !title || !dueDate) {
-      throw new AppError('classId, subjectId, title et dueDate sont requis', 400);
+    if (!classId || !subjectId || !title) {
+      throw new AppError('classId, subjectId et title sont requis', 400);
+    }
+
+    let fileUrl: string | null = null;
+    if (fileData && fileName) {
+      fileUrl = fileData;
     }
 
     const { data, error } = await supabaseAdmin
@@ -358,22 +319,22 @@ router.post('/assignments', async (req, res, next) => {
         subject_id:  subjectId,
         title,
         description: description || null,
-        due_date:    dueDate,
+        due_date:    dueDate || null,
         type:        type || 'homework',
-        max_score:   maxScore ? Number(maxScore) : null,
+        file_url:    fileUrl,
+        file_name:   fileName || null,
       })
       .select()
       .single();
 
     if (error) throw new AppError(`Failed to create assignment: ${error.message}`, 500);
 
-    // Notification en masse à tous les élèves de la classe
     const studentProfileIds = await getClassStudentProfileIds(classId);
     if (studentProfileIds.length > 0) {
       await createBulkNotifications(studentProfileIds, {
         type:  'assignment',
         title: `Nouveau devoir : ${title}`,
-        body:  `À rendre pour le ${new Date(dueDate).toLocaleDateString('fr-FR')}`,
+        body:  dueDate ? `À rendre pour le ${new Date(dueDate).toLocaleDateString('fr-FR')}` : 'Nouveau devoir disponible',
         data:  { assignmentId: data.id },
       });
     }
@@ -382,29 +343,6 @@ router.post('/assignments', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// PUT /api/v1/teacher/assignments/:assignmentId
-router.put('/assignments/:assignmentId', async (req, res, next) => {
-  try {
-    const teacherId           = await getTeacherId(req.user!.id);
-    const { assignmentId }    = req.params;
-    const { title, description, dueDate, type, maxScore } = req.body;
-
-    const { data, error } = await supabaseAdmin
-      .from('assignments')
-      .update({ title, description, due_date: dueDate, type, max_score: maxScore ? Number(maxScore) : undefined })
-      .eq('id', assignmentId)
-      .eq('teacher_id', teacherId)
-      .select()
-      .single();
-
-    if (error) throw new AppError('Failed to update assignment', 500);
-    if (!data)  throw new AppError('Assignment not found or not authorized', 404);
-
-    res.json(successResponse(data, 'Devoir modifié'));
-  } catch (err) { next(err); }
-});
-
-// DELETE /api/v1/teacher/assignments/:assignmentId
 router.delete('/assignments/:assignmentId', async (req, res, next) => {
   try {
     const teacherId        = await getTeacherId(req.user!.id);
@@ -422,13 +360,11 @@ router.delete('/assignments/:assignmentId', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// GET /api/v1/teacher/assignments/:assignmentId/submissions — soumissions d'un devoir
 router.get('/assignments/:assignmentId/submissions', async (req, res, next) => {
   try {
     const teacherId        = await getTeacherId(req.user!.id);
     const { assignmentId } = req.params;
 
-    // Vérifier que le devoir appartient à l'enseignant
     const { data: assignment } = await supabaseAdmin
       .from('assignments')
       .select('id')
@@ -457,24 +393,25 @@ router.get('/assignments/:assignmentId/submissions', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// PATCH /api/v1/teacher/submissions/:submissionId/grade — noter une soumission
 router.patch('/submissions/:submissionId/grade', async (req, res, next) => {
   try {
     const { submissionId } = req.params;
     const { score, feedback } = req.body;
 
-    if (score === undefined) throw new AppError('score est requis', 400);
+    const updateData: any = { status: 'graded' };
+    if (score !== undefined) updateData.score = Number(score);
+    if (feedback !== undefined) updateData.feedback = feedback;
 
     const { data, error } = await supabaseAdmin
       .from('submissions')
-      .update({ score: Number(score), feedback: feedback || null, status: 'graded' })
+      .update(updateData)
       .eq('id', submissionId)
       .select()
       .single();
 
     if (error) throw new AppError('Failed to grade submission', 500);
 
-    res.json(successResponse(data, 'Soumission notée'));
+    res.json(successResponse(data, 'Soumission mise à jour'));
   } catch (err) { next(err); }
 });
 
@@ -482,42 +419,9 @@ router.patch('/submissions/:submissionId/grade', async (req, res, next) => {
 // PRÉSENCES (ATTENDANCE)
 // =============================================================================
 
-// GET /api/v1/teacher/attendance?classId=&date=
-router.get('/attendance', async (req, res, next) => {
-  try {
-    const teacherId = await getTeacherId(req.user!.id);
-    const { classId, date, startDate, endDate } = req.query;
-
-    let query = supabaseAdmin
-      .from('attendance')
-      .select(`
-        *,
-        students:student_id(id, student_number, profiles:profile_id(first_name, last_name))
-      `)
-      .eq('teacher_id', teacherId);
-
-    if (classId)   query = query.eq('class_id', classId as string);
-    if (date)      query = query.eq('date', date as string);
-    if (startDate) query = query.gte('date', startDate as string);
-    if (endDate)   query = query.lte('date', endDate as string);
-
-    const { data, error } = await query.order('date', { ascending: false });
-    if (error) throw new AppError('Failed to fetch attendance', 500);
-
-    const formatted = (data || []).map((a: any) => ({
-      ...a,
-      student: extractFirstItem(a.students),
-    }));
-
-    res.json(successResponse(formatted));
-  } catch (err) { next(err); }
-});
-
-// POST /api/v1/teacher/attendance — enregistrer les présences (tableau)
 router.post('/attendance', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
-    // records = [{ studentId, classId, status, date, note? }]
     const { records } = req.body;
 
     if (!Array.isArray(records) || records.length === 0) {
@@ -528,7 +432,7 @@ router.post('/attendance', async (req, res, next) => {
       teacher_id: teacherId,
       student_id: r.studentId,
       class_id:   r.classId,
-      status:     r.status,   // 'present' | 'absent' | 'late'
+      status:     r.status,
       date:       r.date,
       note:       r.note || null,
     }));
@@ -540,36 +444,6 @@ router.post('/attendance', async (req, res, next) => {
 
     if (error) throw new AppError(`Failed to save attendance: ${error.message}`, 500);
 
-    // Notifications aux parents pour les absences
-    const absents = records.filter((r: any) => r.status === 'absent');
-    for (const absent of absents) {
-      const { data: student } = await supabaseAdmin
-        .from('students')
-        .select('id, profile_id')
-        .eq('id', absent.studentId)
-        .single();
-
-      if (student) {
-        const { data: parentLinks } = await supabaseAdmin
-          .from('parent_student')
-          .select('parents(profile_id)')
-          .eq('student_id', student.id);
-
-        const parentProfileIds = (parentLinks || [])
-          .map((pl: any) => extractFirstItem(pl.parents)?.profile_id)
-          .filter(Boolean);
-
-        if (parentProfileIds.length > 0) {
-          await createBulkNotifications(parentProfileIds, {
-            type:  'absence',
-            title: 'Absence signalée',
-            body:  `Votre enfant a été marqué absent le ${absent.date}.`,
-            data:  { studentId: student.id, date: absent.date },
-          });
-        }
-      }
-    }
-
     res.status(201).json(successResponse(data, 'Présences enregistrées'));
   } catch (err) { next(err); }
 });
@@ -578,47 +452,43 @@ router.post('/attendance', async (req, res, next) => {
 // ANNONCES (ANNOUNCEMENTS)
 // =============================================================================
 
-// GET /api/v1/teacher/announcements
 router.get('/announcements', async (req, res, next) => {
   try {
-    const { classId } = req.query;
-
-    let query = supabaseAdmin
+    const { data, error } = await supabaseAdmin
       .from('announcements')
-      .select('*')
-      .or(`author_id.eq.${req.user!.id},target_role.eq.teacher,target_role.is.null`);
+      .select(`
+        *,
+        classes:class_id(name)
+      `)
+      .eq('author_id', req.user!.id)
+      .order('published_at', { ascending: false });
 
-    if (classId) query = query.eq('class_id', classId as string);
-
-    const { data, error } = await query.order('created_at', { ascending: false });
     if (error) throw new AppError('Failed to fetch announcements', 500);
 
     res.json(successResponse(data || []));
   } catch (err) { next(err); }
 });
 
-// POST /api/v1/teacher/announcements
 router.post('/announcements', async (req, res, next) => {
   try {
-    const { title, content, classId, targetRole } = req.body;
+    const { title, content, classId } = req.body;
 
     if (!title || !content) throw new AppError('title et content sont requis', 400);
 
     const { data, error } = await supabaseAdmin
       .from('announcements')
       .insert({
-        author_id:   req.user!.id,
+        author_id:    req.user!.id,
         title,
         content,
-        class_id:    classId    || null,
-        target_role: targetRole || null,
+        class_id:     classId || null,
+        published_at: new Date().toISOString(),
       })
       .select()
       .single();
 
     if (error) throw new AppError(`Failed to create announcement: ${error.message}`, 500);
 
-    // Si une classe est ciblée, notifier les élèves
     if (classId) {
       const studentProfileIds = await getClassStudentProfileIds(classId);
       if (studentProfileIds.length > 0) {
@@ -635,7 +505,6 @@ router.post('/announcements', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// DELETE /api/v1/teacher/announcements/:announcementId
 router.delete('/announcements/:announcementId', async (req, res, next) => {
   try {
     const { announcementId } = req.params;
@@ -656,9 +525,6 @@ router.delete('/announcements/:announcementId', async (req, res, next) => {
 // MESSAGERIE
 // =============================================================================
 
-// GET /api/v1/teacher/messages/conversations
-// FIX: suppression des joins relationnels Supabase sur sender/receiver qui causaient le 500.
-// On récupère les messages bruts puis on déduplique côté serveur.
 router.get('/messages/conversations', async (req, res, next) => {
   try {
     const myId = req.user!.id;
@@ -674,7 +540,6 @@ router.get('/messages/conversations', async (req, res, next) => {
       throw new AppError('Failed to fetch conversations', 500);
     }
 
-    // Récupérer les profils des interlocuteurs uniques
     const partnerIds = [
       ...new Set(
         (messages || []).map((m: any) => (m.sender_id === myId ? m.receiver_id : m.sender_id))
@@ -691,15 +556,14 @@ router.get('/messages/conversations', async (req, res, next) => {
       (profiles || []).forEach((p: any) => { profilesMap[p.id] = p; });
     }
 
-    // Enrichir chaque message avec les infos de l'interlocuteur
     const enriched = (messages || []).map((m: any) => {
       const isMe      = m.sender_id === myId;
       const partnerId = isMe ? m.receiver_id : m.sender_id;
       const partner   = profilesMap[partnerId] || {};
       return {
-        ...m,
-        sender:   profilesMap[m.sender_id]   || null,
-        receiver: profilesMap[m.receiver_id] || null,
+        id: m.id,
+        content: m.content,
+        created_at: m.created_at,
         partnerId,
         otherName: partner.first_name
           ? `${partner.first_name} ${partner.last_name || ''}`.trim()
@@ -707,11 +571,17 @@ router.get('/messages/conversations', async (req, res, next) => {
       };
     });
 
-    res.json(successResponse(enriched));
+    const unique = new Map();
+    for (const conv of enriched) {
+      if (!unique.has(conv.partnerId)) {
+        unique.set(conv.partnerId, conv);
+      }
+    }
+
+    res.json(successResponse(Array.from(unique.values())));
   } catch (err) { next(err); }
 });
 
-// GET /api/v1/teacher/messages/:userId — conversation avec un utilisateur
 router.get('/messages/:userId', async (req, res, next) => {
   try {
     const { userId } = req.params;
@@ -727,7 +597,6 @@ router.get('/messages/:userId', async (req, res, next) => {
 
     if (error) throw new AppError('Failed to fetch messages', 500);
 
-    // Marquer les messages reçus comme lus
     await supabaseAdmin
       .from('messages')
       .update({ is_read: true })
@@ -739,7 +608,6 @@ router.get('/messages/:userId', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// POST /api/v1/teacher/messages — envoyer un message
 router.post('/messages', async (req, res, next) => {
   try {
     const { receiverId, content } = req.body;
@@ -759,71 +627,15 @@ router.post('/messages', async (req, res, next) => {
 
     if (error) throw new AppError(`Failed to send message: ${error.message}`, 500);
 
-    // Notification au destinataire
     await createNotification({
       recipientId: receiverId,
       type:        'message',
-      title:       `Message de ${req.user!.firstName || ''} ${req.user!.lastName || ''}`.trim(),
+      title:       `Nouveau message`,
       body:        content.substring(0, 100),
       data:        { messageId: data.id, senderId: req.user!.id },
     });
 
     res.status(201).json(successResponse(data, 'Message envoyé'));
-  } catch (err) { next(err); }
-});
-
-// =============================================================================
-// PROFIL ENSEIGNANT
-// =============================================================================
-
-// GET /api/v1/teacher/profile
-router.get('/profile', async (req, res, next) => {
-  try {
-    const { data: profile, error: profileError } = await supabaseAdmin
-      .from('profiles')
-      .select('*')
-      .eq('id', req.user!.id)
-      .single();
-
-    if (profileError || !profile) throw new AppError('Profile not found', 404);
-
-    const { data: teacher } = await supabaseAdmin
-      .from('teachers')
-      .select('*')
-      .eq('profile_id', req.user!.id)
-      .single();
-
-    res.json(successResponse({ ...profile, teacherData: teacher || null }));
-  } catch (err) { next(err); }
-});
-
-// PATCH /api/v1/teacher/profile — mettre à jour le profil
-router.patch('/profile', async (req, res, next) => {
-  try {
-    const { firstName, lastName, phone, address, gender, avatarUrl } = req.body;
-
-    const updates: Record<string, any> = {};
-    if (firstName !== undefined) updates.first_name  = firstName;
-    if (lastName  !== undefined) updates.last_name   = lastName;
-    if (phone     !== undefined) updates.phone       = phone;
-    if (address   !== undefined) updates.address     = address;
-    if (gender    !== undefined) updates.gender      = gender;
-    if (avatarUrl !== undefined) updates.avatar_url  = avatarUrl;
-
-    if (Object.keys(updates).length === 0) {
-      throw new AppError('Aucune donnée à mettre à jour', 400);
-    }
-
-    const { data, error } = await supabaseAdmin
-      .from('profiles')
-      .update(updates)
-      .eq('id', req.user!.id)
-      .select()
-      .single();
-
-    if (error) throw new AppError('Failed to update profile', 500);
-
-    res.json(successResponse(data, 'Profil mis à jour'));
   } catch (err) { next(err); }
 });
 
