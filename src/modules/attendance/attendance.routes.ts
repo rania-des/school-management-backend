@@ -101,7 +101,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     
     let query = supabaseAdmin
       .from('attendance')
-      .select('*, students(id, student_number, profiles:profile_id(first_name, last_name)), classes(id, name)')
+      .select('id, student_id, date, status, reason, class_id')
       .order('date', { ascending: false })
       .limit(Number(limit));
 
