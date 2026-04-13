@@ -1,4 +1,5 @@
-import { Router, Request, Response, NextFunction } from 'express';
+import { Router } from 'express';
+import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { authenticate, authorize } from '../../middleware/auth.middleware';
 import { AppError } from '../../middleware/error.middleware';
@@ -7,37 +8,31 @@ import { getPagination, paginate, successResponse } from '../../utils/pagination
 const router = Router();
 router.use(authenticate);
 
-const SUPABASE_URL = process.env.SUPABASE_URL!;
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-const H = {
-  'apikey': SUPABASE_KEY,
-  'Authorization': `Bearer ${SUPABASE_KEY}`,
-  'Content-Type': 'application/json',
-};
+function getHeaders() {
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+  return {
+    'apikey': key,
+    'Authorization': `Bearer ${key}`,
+    'Content-Type': 'application/json',
+  };
+}
 
 async function sbGet(path: string) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { headers: H });
+  const url = process.env.SUPABASE_URL!;
+  const res = await fetch(`${url}/rest/v1/${path}`, { headers: getHeaders() });
   const data = await res.json();
-  if (!res.ok) {
-    console.error(`❌ sbGet ${path.split('?')[0]} → ${res.status}:`, JSON.stringify(data).slice(0, 200));
-  }
+  if (!res.ok) console.error(`❌ sbGet ${path.split('?')[0]} → ${res.status}:`, JSON.stringify(data).slice(0, 200));
   return { data, ok: res.ok };
 }
 async function sbPatch(path: string, body: any) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+  const url = process.env.SUPABASE_URL!;
+  const res = await fetch(`${url}/rest/v1/${path}`, {
     method: 'PATCH',
-    headers: { ...H, 'Prefer': 'return=representation' },
+    headers: { ...getHeaders(), 'Prefer': 'return=representation' },
     body: JSON.stringify(body),
   });
   const data = await res.json() as any[];
   return { data: Array.isArray(data) ? data[0] : data, ok: res.ok };
-}
-async function sbDelete(path: string) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-    method: 'DELETE',
-    headers: H,
-  });
-  return { ok: res.ok };
 }
 
 const updateProfileSchema = z.object({
@@ -53,6 +48,7 @@ const updateProfileSchema = z.object({
 // GET /users/me/profile
 router.get('/me/profile', async (req: Request, res: Response, next: NextFunction) => {
   try {
+    // Table : profiles (confirmé dans la liste des tables)
     const { data } = await sbGet(`profiles?id=eq.${req.user!.id}&select=*`);
     const user = Array.isArray(data) ? data[0] : null;
     if (!user) throw new AppError('Profile not found', 404);
@@ -90,13 +86,6 @@ router.patch('/:id/profile', authorize('admin'), async (req: Request, res: Respo
     if (body.dateOfBirth) upd.date_of_birth = body.dateOfBirth;
     const { data, ok } = await sbPatch(`profiles?id=eq.${req.params.id}`, upd);
     if (!ok || !data) throw new AppError('User not found', 404);
-    if (body.specialization) {
-      const teacher = await sbGet(`teachers?profile_id=eq.${req.params.id}&select=id`);
-      const teacherData = Array.isArray(teacher.data) ? teacher.data[0] : null;
-      if (teacherData?.id) {
-        await sbPatch(`teachers?id=eq.${teacherData.id}`, { specialization: body.specialization });
-      }
-    }
     return res.json(successResponse(data, 'Profile updated'));
   } catch (err) { return next(err); }
 });
@@ -113,54 +102,13 @@ router.patch('/:id/role', authorize('admin'), async (req: Request, res: Response
   } catch (err) { return next(err); }
 });
 
-// PATCH /users/:id/reset-password (admin)
-router.patch('/:id/reset-password', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { password } = z.object({ password: z.string().min(8) }).parse(req.body);
-    const authRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${req.params.id}`, {
-      method: 'PUT',
-      headers: {
-        'apikey': SUPABASE_KEY,
-        'Authorization': `Bearer ${SUPABASE_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ password }),
-    });
-    if (!authRes.ok) {
-      const error = await authRes.text();
-      throw new AppError(`Failed to reset password: ${error}`, 500);
-    }
-    return res.json(successResponse(null, 'Password reset successfully'));
-  } catch (err) { return next(err); }
-});
-
-// DELETE /users/:id (admin)
-router.delete('/:id', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    if (req.params.id === req.user!.id) throw new AppError('Cannot delete your own account', 400);
-    const authRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${req.params.id}`, {
-      method: 'DELETE',
-      headers: {
-        'apikey': SUPABASE_KEY,
-        'Authorization': `Bearer ${SUPABASE_KEY}`,
-      },
-    });
-    if (!authRes.ok) {
-      const error = await authRes.text();
-      console.error('Auth delete error:', error);
-    }
-    const { ok } = await sbDelete(`profiles?id=eq.${req.params.id}`);
-    if (!ok) throw new AppError('Failed to delete user', 500);
-    return res.status(204).send();
-  } catch (err) { return next(err); }
-});
-
 // GET /users  — admin voit tout, teacher voit seulement students
 router.get('/', authorize('admin', 'teacher'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { page, limit, offset } = getPagination(req);
     const { role, search } = req.query;
 
+    // Table : profiles
     let url = `profiles?select=*&order=created_at.desc&offset=${offset}&limit=${limit}`;
 
     if (role) {
@@ -173,45 +121,34 @@ router.get('/', authorize('admin', 'teacher'), async (req: Request, res: Respons
       url += `&or=(first_name.ilike.*${search}*,last_name.ilike.*${search}*,email.ilike.*${search}*)`;
     }
 
-    console.log('🔵 GET /users query:', url);
-    const { data, ok } = await sbGet(url);
-    console.log('🔵 GET /users result ok:', ok, 'type:', typeof data, 'isArray:', Array.isArray(data), 'raw:', JSON.stringify(data).slice(0, 300));
-
+    const { data } = await sbGet(url);
     const arr = Array.isArray(data) ? data : [];
-    console.log('🔵 arr length:', arr.length);
 
-    // Enrichir chaque user avec ses données de rôle
+    // Enrichir chaque user avec son class_id si student
     const enriched = await Promise.all(arr.map(async (user: any) => {
-      try {
-        if (user.role === 'student') {
-          const { data: st } = await sbGet(`students?profile_id=eq.${user.id}&select=id,class_id`);
-          const student = Array.isArray(st) ? st[0] : null;
-          if (student?.class_id) {
-            const { data: cls } = await sbGet(`classes?id=eq.${student.class_id}&select=name`);
-            const className = Array.isArray(cls) ? cls[0]?.name : null;
-            return { ...user, roleId: student.id, roleData: { classes: { name: className }, class_id: student.class_id } };
-          }
-          return { ...user, roleId: student?.id || null, roleData: {} };
+      if (user.role === 'student') {
+        const { data: st } = await sbGet(`students?profile_id=eq.${user.id}&select=id,class_id`);
+        const student = Array.isArray(st) ? st[0] : null;
+        if (student?.class_id) {
+          const { data: cls } = await sbGet(`classes?id=eq.${student.class_id}&select=name`);
+          const className = Array.isArray(cls) ? cls[0]?.name : null;
+          return { ...user, roleId: student.id, roleData: { classes: { name: className } } };
         }
-        if (user.role === 'teacher') {
-          const { data: te } = await sbGet(`teachers?profile_id=eq.${user.id}&select=id,specialization`);
-          const teacher = Array.isArray(te) ? te[0] : null;
-          return { ...user, roleId: teacher?.id || null, roleData: teacher || {} };
-        }
-        if (user.role === 'parent') {
-          const { data: pa } = await sbGet(`parents?profile_id=eq.${user.id}&select=id`);
-          const parent = Array.isArray(pa) ? pa[0] : null;
-          return { ...user, roleId: parent?.id || null, roleData: parent || {} };
-        }
-        // admin — pas de table admins, retourner tel quel
-        return { ...user, roleId: null, roleData: {} };
-      } catch (e) {
-        console.error('❌ enrich error for user', user.id, e);
-        return { ...user, roleId: null, roleData: {} };
+        return { ...user, roleId: student?.id || null };
       }
+      if (user.role === 'teacher') {
+        const { data: te } = await sbGet(`teachers?profile_id=eq.${user.id}&select=id`);
+        const teacher = Array.isArray(te) ? te[0] : null;
+        return { ...user, roleId: teacher?.id || null };
+      }
+      if (user.role === 'parent') {
+        const { data: pa } = await sbGet(`parents?profile_id=eq.${user.id}&select=id`);
+        const parent = Array.isArray(pa) ? pa[0] : null;
+        return { ...user, roleId: parent?.id || null };
+      }
+      return user;
     }));
 
-    console.log('🔵 enriched length:', enriched.length);
     return res.json(paginate(enriched, enriched.length, { page, limit, offset }));
   } catch (err) { return next(err); }
 });
@@ -223,33 +160,7 @@ router.get('/:id', authorize('admin', 'teacher'), async (req: Request, res: Resp
     const user = Array.isArray(data) ? data[0] : null;
     if (!user) throw new AppError('User not found', 404);
     if (req.user!.role === 'teacher' && user.role !== 'student') throw new AppError('Forbidden', 403);
-
-    let roleData = null;
-    if (user.role === 'student') {
-      const { data: st } = await sbGet(`students?profile_id=eq.${user.id}&select=*`);
-      roleData = Array.isArray(st) ? st[0] : null;
-      if (roleData?.class_id) {
-        const { data: cls } = await sbGet(`classes?id=eq.${roleData.class_id}&select=name`);
-        if (Array.isArray(cls) && cls[0]) roleData.classes = cls[0];
-      }
-    } else if (user.role === 'teacher') {
-      const { data: te } = await sbGet(`teachers?profile_id=eq.${user.id}&select=*`);
-      roleData = Array.isArray(te) ? te[0] : null;
-    } else if (user.role === 'parent') {
-      const { data: pa } = await sbGet(`parents?profile_id=eq.${user.id}&select=*`);
-      roleData = Array.isArray(pa) ? pa[0] : null;
-    }
-
-    if (user.role === 'student' && roleData?.id) {
-      const { data: ps } = await sbGet(`parent_student?student_id=eq.${roleData.id}&select=*`);
-      roleData.parent_student = ps || [];
-    }
-    if (user.role === 'parent' && roleData?.id) {
-      const { data: ps } = await sbGet(`parent_student?parent_id=eq.${roleData.id}&select=*`);
-      roleData.parent_student = ps || [];
-    }
-
-    return res.json(successResponse({ ...user, roleData }));
+    return res.json(successResponse(user));
   } catch (err) { return next(err); }
 });
 
