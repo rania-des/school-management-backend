@@ -136,7 +136,10 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     }
 
     const { data, error } = await query;
-    if (error) throw new AppError('Failed to fetch attendance', 500);
+    if (error) {
+      console.error('Attendance query error:', JSON.stringify(error));
+      throw new AppError(`Attendance error: ${error.message || error.code || 'unknown'}`, 500);
+    }
 
     return res.json(successResponse(data || []));
   } catch (err) {
