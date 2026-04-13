@@ -101,7 +101,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     
     let query = supabaseAdmin
       .from('attendance')
-      .select('*, students(*, profiles(first_name, last_name)), classes(*), teachers(*)')
+      .select('*, students(id, student_number, profile_id, profiles(first_name, last_name)), classes(*), teachers(*)')
       .order('date', { ascending: false })
       .limit(Number(limit));
 
@@ -230,37 +230,6 @@ router.delete('/:id', authorize('teacher', 'admin'), async (req: Request, res: R
     if (error) throw new AppError('Failed to delete attendance record', 500);
     
     return res.status(204).send();
-  } catch (err) {
-    return next(err);
-  }
-});
-
-// GET /attendance/students/:classId - Récupérer les élèves d'une classe (version avec profiles)
-router.get('/students/:classId', authorize('teacher', 'admin'), async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { classId } = req.params;
-
-    const { data: students, error } = await supabaseAdmin
-      .from('students')
-      .select(`
-        id,
-        profile_id,
-        student_number,
-        profiles:profile_id(first_name, last_name, email)
-      `)
-      .eq('class_id', classId);
-
-    if (error) throw new AppError('Failed to fetch students', 500);
-
-    // Formater la réponse
-    const formattedStudents = (students || []).map((s: any) => ({
-      id: s.id,
-      profile_id: s.profile_id,
-      student_number: s.student_number,
-      profiles: s.profiles && Array.isArray(s.profiles) ? s.profiles[0] : s.profiles
-    }));
-
-    return res.json(successResponse(formattedStudents || []));
   } catch (err) {
     return next(err);
   }
