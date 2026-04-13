@@ -9,7 +9,9 @@ const router = Router();
 router.use(authenticate);
 
 function getHeaders() {
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+  // Fallback hardcodé si les variables d'environnement ne sont pas définies
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY 
+    || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
   return {
     'apikey': key,
     'Authorization': `Bearer ${key}`,
@@ -17,15 +19,20 @@ function getHeaders() {
   };
 }
 
+function getUrl() {
+  return process.env.SUPABASE_URL || 'https://wlgclriinxtyctaadiql.supabase.co';
+}
+
 async function sbGet(path: string) {
-  const url = process.env.SUPABASE_URL!;
+  const url = getUrl();
   const res = await fetch(`${url}/rest/v1/${path}`, { headers: getHeaders() });
   const data = await res.json();
   if (!res.ok) console.error(`❌ sbGet ${path.split('?')[0]} → ${res.status}:`, JSON.stringify(data).slice(0, 200));
   return { data, ok: res.ok };
 }
+
 async function sbPatch(path: string, body: any) {
-  const url = process.env.SUPABASE_URL!;
+  const url = getUrl();
   const res = await fetch(`${url}/rest/v1/${path}`, {
     method: 'PATCH',
     headers: { ...getHeaders(), 'Prefer': 'return=representation' },
@@ -48,7 +55,6 @@ const updateProfileSchema = z.object({
 // GET /users/me/profile
 router.get('/me/profile', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    // Table : profiles (confirmé dans la liste des tables)
     const { data } = await sbGet(`profiles?id=eq.${req.user!.id}&select=*`);
     const user = Array.isArray(data) ? data[0] : null;
     if (!user) throw new AppError('Profile not found', 404);
@@ -102,13 +108,75 @@ router.patch('/:id/role', authorize('admin'), async (req: Request, res: Response
   } catch (err) { return next(err); }
 });
 
+// PATCH /users/:id/reset-password (admin)
+router.patch('/:id/reset-password', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { password } = z.object({ password: z.string().min(8) }).parse(req.body);
+    const url = getUrl();
+    const headers = getHeaders();
+    
+    const authRes = await fetch(`${url}/auth/v1/admin/users/${req.params.id}`, {
+      method: 'PUT',
+      headers: {
+        'apikey': headers['apikey'],
+        'Authorization': headers['Authorization'],
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ password }),
+    });
+    
+    if (!authRes.ok) {
+      const error = await authRes.text();
+      throw new AppError(`Failed to reset password: ${error}`, 500);
+    }
+    
+    return res.json(successResponse(null, 'Password reset successfully'));
+  } catch (err) { return next(err); }
+});
+
+// DELETE /users/:id (admin)
+router.delete('/:id', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (req.params.id === req.user!.id) throw new AppError('Cannot delete your own account', 400);
+    
+    const url = getUrl();
+    const headers = getHeaders();
+    
+    // Supprimer l'utilisateur de Supabase Auth
+    const authRes = await fetch(`${url}/auth/v1/admin/users/${req.params.id}`, {
+      method: 'DELETE',
+      headers: {
+        'apikey': headers['apikey'],
+        'Authorization': headers['Authorization'],
+      },
+    });
+    
+    if (!authRes.ok) {
+      const error = await authRes.text();
+      console.error('Auth delete error:', error);
+    }
+    
+    // Supprimer le profil
+    const { ok } = await sbGet(`profiles?id=eq.${req.params.id}`);
+    if (ok && Array.isArray(ok)) {
+      // Profil trouvé, le supprimer
+      const deleteRes = await fetch(`${url}/rest/v1/profiles?id=eq.${req.params.id}`, {
+        method: 'DELETE',
+        headers: getHeaders(),
+      });
+      if (!deleteRes.ok) throw new AppError('Failed to delete user profile', 500);
+    }
+    
+    return res.status(204).send();
+  } catch (err) { return next(err); }
+});
+
 // GET /users  — admin voit tout, teacher voit seulement students
 router.get('/', authorize('admin', 'teacher'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { page, limit, offset } = getPagination(req);
     const { role, search } = req.query;
 
-    // Table : profiles
     let url = `profiles?select=*&order=created_at.desc&offset=${offset}&limit=${limit}`;
 
     if (role) {
@@ -160,7 +228,21 @@ router.get('/:id', authorize('admin', 'teacher'), async (req: Request, res: Resp
     const user = Array.isArray(data) ? data[0] : null;
     if (!user) throw new AppError('User not found', 404);
     if (req.user!.role === 'teacher' && user.role !== 'student') throw new AppError('Forbidden', 403);
-    return res.json(successResponse(user));
+    
+    // Enrichir avec les données spécifiques
+    let roleData = null;
+    if (user.role === 'student') {
+      const { data: st } = await sbGet(`students?profile_id=eq.${user.id}&select=*,classes(name)`);
+      roleData = Array.isArray(st) ? st[0] : null;
+    } else if (user.role === 'teacher') {
+      const { data: te } = await sbGet(`teachers?profile_id=eq.${user.id}&select=*`);
+      roleData = Array.isArray(te) ? te[0] : null;
+    } else if (user.role === 'parent') {
+      const { data: pa } = await sbGet(`parents?profile_id=eq.${user.id}&select=*`);
+      roleData = Array.isArray(pa) ? pa[0] : null;
+    }
+    
+    return res.json(successResponse({ ...user, roleData }));
   } catch (err) { return next(err); }
 });
 
