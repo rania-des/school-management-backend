@@ -35,7 +35,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
 
     let query = supabaseAdmin
       .from('grades')
-      .select(`*, subjects(name, code, coefficient), students(student_number, users(first_name, last_name)), teachers(users(first_name, last_name)), classes(name)`, { count: 'exact' })
+      .select(`*, subjects(name, code, coefficient), students(student_number, profiles:profile_id(first_name, last_name)), teacher_id, classes(name)`, { count: 'exact' })
       .order('grade_date', { ascending: false })
       .range(offset, offset + limit - 1);
 
@@ -116,7 +116,7 @@ router.get('/bulletin', async (req: Request, res: Response, next: NextFunction) 
     }
 
     const { data: grades, error } = await supabaseAdmin.from('grades')
-      .select('*, subjects(name, code, coefficient), teachers(users(first_name, last_name))')
+      .select('*, subjects(name, code, coefficient), teacher_id')
       .eq('student_id', studentId as string).eq('period', period as string)
       .eq('academic_year_id', academicYearId as string).order('subjects(name)', { ascending: true });
 
@@ -131,7 +131,7 @@ router.get('/bulletin', async (req: Request, res: Response, next: NextFunction) 
     const generalAverage = totalWeight > 0 ? (totalWeightedScore / totalWeight).toFixed(2) : null;
 
     const { data: comments } = await supabaseAdmin.from('teacher_comments')
-      .select('*, subjects(name), teachers(users(first_name, last_name))')
+      .select('*, subjects(name), teacher_id')
       .eq('student_id', studentId as string).eq('period', period as string)
       .eq('academic_year_id', academicYearId as string);
 
@@ -204,7 +204,7 @@ router.get('/bulletin/pdf', async (req: Request, res: Response, next: NextFuncti
 
     // Fetch comments
     const { data: comments } = await supabaseAdmin.from('teacher_comments')
-      .select('*, subjects(name), teachers(users(first_name, last_name))')
+      .select('*, subjects(name), teacher_id')
       .eq('student_id', studentId as string).eq('period', period as string);
 
     // Period label

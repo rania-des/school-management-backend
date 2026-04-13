@@ -90,6 +90,7 @@ app.use(`${API}/attendance`,    attendanceRoutes);
 app.use(`${API}/schedule`,      scheduleRoutes);
 app.use(`${API}/messages`,      messagesRoutes);
 app.use(`${API}/announcements`, announcementsRoutes);
+app.use(`${API}/news`,          announcementsRoutes); // alias -> announcements
 app.use(`${API}/payments`,      paymentsRoutes);
 app.use(`${API}/canteen`,       canteenRoutes);
 app.use(`${API}/meetings`,      meetingsRoutes);

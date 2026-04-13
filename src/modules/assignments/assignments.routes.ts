@@ -36,7 +36,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
         *,
         subjects(name, code, color),
         classes(name),
-        teachers(users(first_name, last_name))
+        teacher_id
       `, { count: 'exact' })
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
@@ -76,7 +76,7 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { data, error } = await supabaseAdmin
       .from('assignments')
-      .select(`*, subjects(name), classes(name), teachers(users(first_name, last_name))`)
+      .select(`*, subjects(name), classes(name), teacher_id`)
       .eq('id', req.params.id)
       .single();
 
