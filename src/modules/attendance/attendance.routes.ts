@@ -136,7 +136,10 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     }
 
     const { data, error } = await query;
-    if (error) throw new AppError('Failed to fetch attendance', 500);
+    if (error) {
+      console.error('ATTENDANCE ERROR:', JSON.stringify(error, null, 2));
+      throw new AppError(`Failed to fetch attendance: ${error.message}`, 500);
+    }
 
     return res.json(successResponse(data || []));
   } catch (err) {
@@ -174,7 +177,10 @@ router.post('/bulk', authorize('teacher', 'admin'), async (req: Request, res: Re
       .upsert(records, { onConflict: 'student_id,class_id,date' })
       .select();
 
-    if (error) throw new AppError(`Failed to save attendance: ${error.message}`, 500);
+    if (error) {
+      console.error('ATTENDANCE UPSERT ERROR:', JSON.stringify(error, null, 2));
+      throw new AppError(`Failed to save attendance: ${error.message}`, 500);
+    }
 
     return res.status(201).json(successResponse(data, `${data?.length} attendance records saved`));
   } catch (err) {
@@ -202,7 +208,10 @@ router.get('/stats/:studentId', authorize('teacher', 'admin', 'parent'), async (
     }
 
     const { data, error } = await query;
-    if (error) throw new AppError('Failed to fetch attendance stats', 500);
+    if (error) {
+      console.error('ATTENDANCE STATS ERROR:', JSON.stringify(error, null, 2));
+      throw new AppError('Failed to fetch attendance stats', 500);
+    }
 
     const stats = {
       present: (data || []).filter((a: any) => a.status === 'present').length,
@@ -227,7 +236,10 @@ router.delete('/:id', authorize('teacher', 'admin'), async (req: Request, res: R
       .delete()
       .eq('id', id);
 
-    if (error) throw new AppError('Failed to delete attendance record', 500);
+    if (error) {
+      console.error('ATTENDANCE DELETE ERROR:', JSON.stringify(error, null, 2));
+      throw new AppError('Failed to delete attendance record', 500);
+    }
     
     return res.status(204).send();
   } catch (err) {
