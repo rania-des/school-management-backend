@@ -3,16 +3,90 @@ import { z } from 'zod';
 import { authenticate, authorize } from '../../middleware/auth.middleware';
 import { AppError } from '../../middleware/error.middleware';
 import { successResponse, getPagination, paginate } from '../../utils/pagination';
-import { sbGet, sbGetOne, sbInsert, sbUpdate, sbDelete, sbUpsert } from '../../utils/sbClient';
 
 const router = Router();
 router.use(authenticate, authorize('admin'));
+
+// ── Supabase REST helpers (avec clés hardcodées comme dans teacher.routes.ts) ──
+const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
+
+function sbHeaders() {
+  return {
+    'apikey': SUPABASE_KEY,
+    'Authorization': `Bearer ${SUPABASE_KEY}`,
+    'Content-Type': 'application/json',
+    'Prefer': 'return=representation',
+  };
+}
+
+async function sbGet(table: string, params = ''): Promise<any> {
+  const url = `${SUPABASE_URL}/rest/v1/${table}${params ? '?' + params : ''}`;
+  const res = await fetch(url, { headers: sbHeaders() });
+  if (!res.ok) {
+    const err = await res.text();
+    console.error(`❌ sbGet ${table} → ${res.status}:`, err);
+    return [];
+  }
+  const data = await res.json();
+  return Array.isArray(data) ? data : (data ? [data] : []);
+}
+
+async function sbGetOne(table: string, params = ''): Promise<any> {
+  const rows = await sbGet(table, params);
+  return rows[0] ?? null;
+}
+
+async function sbInsert(table: string, body: object | object[]): Promise<any> {
+  const url = `${SUPABASE_URL}/rest/v1/${table}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: sbHeaders(),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    console.error(`❌ sbInsert ${table} → ${res.status}:`, err);
+    throw new Error(`DB insert failed on ${table}`);
+  }
+  const data = await res.json();
+  return Array.isArray(data) ? (data.length > 0 ? data[0] : data) : data;
+}
+
+async function sbUpdate(table: string, params: string, body: object): Promise<any> {
+  const url = `${SUPABASE_URL}/rest/v1/${table}?${params}`;
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers: sbHeaders(),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    console.error(`❌ sbUpdate ${table} → ${res.status}:`, err);
+    throw new Error(`DB update failed on ${table}`);
+  }
+  const data = await res.json();
+  return Array.isArray(data) ? (data.length > 0 ? data[0] : data) : data;
+}
+
+async function sbDelete(table: string, params: string): Promise<void> {
+  const url = `${SUPABASE_URL}/rest/v1/${table}?${params}`;
+  const res = await fetch(url, {
+    method: 'DELETE',
+    headers: sbHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    console.error(`❌ sbDelete ${table} → ${res.status}:`, err);
+    throw new Error(`DB delete failed on ${table}`);
+  }
+}
 
 // ── SECTIONS ──────────────────────────────────────────────────────────────────
 router.get('/sections', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const data = await sbGet('sections', 'select=*&order=name').catch(() => null);
-    if (!data) return res.json(successResponse([
+    if (!data || data.length === 0) return res.json(successResponse([
       { id: '1', name: 'Mathématiques', code: 'MATH' },
       { id: '2', name: 'Sciences', code: 'SCI' },
       { id: '3', name: 'Lettres', code: 'LET' },
@@ -28,7 +102,7 @@ router.get('/sections', async (req: Request, res: Response, next: NextFunction) 
 router.get('/levels', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const data = await sbGet('levels', 'select=*&order=order_index').catch(() => null);
-    if (!data) return res.json(successResponse([
+    if (!data || data.length === 0) return res.json(successResponse([
       { id: '1', name: '1ère année', order_index: 1 },
       { id: '2', name: '2ème année', order_index: 2 },
       { id: '3', name: '3ème année', order_index: 3 },
@@ -209,25 +283,8 @@ router.post('/parent-student', async (req: Request, res: Response, next: NextFun
       parentId: z.string().uuid(), studentId: z.string().uuid(),
       relationship: z.string().default('parent'), isPrimary: z.boolean().default(false),
     }).parse(req.body);
-
-    let finalParentId = body.parentId;
-    const byId = await sbGetOne('parents', `id=eq.${body.parentId}&select=id`).catch(() => null);
-    if (!byId) {
-      const byProfile = await sbGetOne('parents', `profile_id=eq.${body.parentId}&select=id`);
-      if (!byProfile) throw new AppError(`Parent not found for id: ${body.parentId}`, 404);
-      finalParentId = byProfile.id;
-    }
-
-    let finalStudentId = body.studentId;
-    const sById = await sbGetOne('students', `id=eq.${body.studentId}&select=id`).catch(() => null);
-    if (!sById) {
-      const sByProfile = await sbGetOne('students', `profile_id=eq.${body.studentId}&select=id`);
-      if (!sByProfile) throw new AppError(`Student not found for id: ${body.studentId}`, 404);
-      finalStudentId = sByProfile.id;
-    }
-
     const data = await sbInsert('parent_student', {
-      parent_id: finalParentId, student_id: finalStudentId,
+      parent_id: body.parentId, student_id: body.studentId,
       relationship: body.relationship, is_primary: body.isPrimary,
     });
     return res.status(201).json(successResponse(data));
