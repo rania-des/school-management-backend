@@ -101,7 +101,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     
     let query = supabaseAdmin
       .from('attendance')
-      .select('id, student_id, date, status, reason, class_id')
+      .select('*, students(*, profiles(first_name, last_name)), classes(*), teachers(*)')
       .order('date', { ascending: false })
       .limit(Number(limit));
 
@@ -136,10 +136,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     }
 
     const { data, error } = await query;
-    if (error) {
-      console.error('Attendance query error:', JSON.stringify(error));
-      throw new AppError(`Attendance error: ${error.message || error.code || 'unknown'}`, 500);
-    }
+    if (error) throw new AppError('Failed to fetch attendance', 500);
 
     return res.json(successResponse(data || []));
   } catch (err) {
