@@ -78,7 +78,7 @@ router.get('/students/:classId', authorize('teacher', 'admin'), async (req: Requ
         id,
         profile_id,
         student_number,
-        users:profile_id(first_name, last_name, email)
+        profiles:profile_id(first_name, last_name, email)
       `)
       .eq('class_id', classId);
 
@@ -234,7 +234,8 @@ router.delete('/:id', authorize('teacher', 'admin'), async (req: Request, res: R
     return next(err);
   }
 });
-// GET /attendance/students/:classId - Récupérer les élèves d'une classe
+
+// GET /attendance/students/:classId - Récupérer les élèves d'une classe (version avec profiles)
 router.get('/students/:classId', authorize('teacher', 'admin'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { classId } = req.params;
@@ -245,7 +246,7 @@ router.get('/students/:classId', authorize('teacher', 'admin'), async (req: Requ
         id,
         profile_id,
         student_number,
-        users:profile_id(first_name, last_name, email)
+        profiles:profile_id(first_name, last_name, email)
       `)
       .eq('class_id', classId);
 
@@ -256,7 +257,7 @@ router.get('/students/:classId', authorize('teacher', 'admin'), async (req: Requ
       id: s.id,
       profile_id: s.profile_id,
       student_number: s.student_number,
-      users: s.users && Array.isArray(s.users) ? s.users[0] : s.users
+      profiles: s.profiles && Array.isArray(s.profiles) ? s.profiles[0] : s.profiles
     }));
 
     return res.json(successResponse(formattedStudents || []));
