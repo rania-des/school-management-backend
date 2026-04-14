@@ -76,23 +76,19 @@ async function getRoleData(profileId: string, role: string): Promise<any> {
   return null;
 }
 
-// ✅ NOUVEAU: Helper pour récupérer les parents liés à un étudiant
+// Helper pour récupérer les parents liés à un étudiant
 async function getStudentParents(studentProfileId: string): Promise<any[]> {
-  // 1. Récupérer l'ID de l'étudiant dans la table students
   const { data: studentData } = await sbGet(`students?profile_id=eq.${studentProfileId}&select=id`);
   const student = Array.isArray(studentData) ? studentData[0] : null;
   if (!student) return [];
   
-  // 2. Récupérer les liens parent_student
   const { data: links } = await sbGet(`parent_student?student_id=eq.${student.id}&select=*,parents:parent_id(*)`);
   if (!links || !Array.isArray(links)) return [];
   
-  // 3. Pour chaque lien, récupérer les infos du parent (profil)
   const parents = await Promise.all(links.map(async (link: any) => {
     const parent = link.parents;
     if (!parent) return null;
     
-    // Récupérer le profil du parent
     const { data: profileData } = await sbGet(`profiles?id=eq.${parent.profile_id}&select=first_name,last_name,email`);
     const profile = Array.isArray(profileData) ? profileData[0] : null;
     
@@ -114,27 +110,22 @@ async function getStudentParents(studentProfileId: string): Promise<any[]> {
   return parents.filter(p => p !== null);
 }
 
-// ✅ NOUVEAU: Helper pour récupérer les enfants liés à un parent
+// Helper pour récupérer les enfants liés à un parent
 async function getParentChildren(parentProfileId: string): Promise<any[]> {
-  // 1. Récupérer l'ID du parent dans la table parents
   const { data: parentData } = await sbGet(`parents?profile_id=eq.${parentProfileId}&select=id`);
   const parent = Array.isArray(parentData) ? parentData[0] : null;
   if (!parent) return [];
   
-  // 2. Récupérer les liens parent_student
   const { data: links } = await sbGet(`parent_student?parent_id=eq.${parent.id}&select=*,students:student_id(*)`);
   if (!links || !Array.isArray(links)) return [];
   
-  // 3. Pour chaque lien, récupérer les infos de l'étudiant (profil et classe)
   const children = await Promise.all(links.map(async (link: any) => {
     const student = link.students;
     if (!student) return null;
     
-    // Récupérer le profil de l'étudiant
     const { data: profileData } = await sbGet(`profiles?id=eq.${student.profile_id}&select=first_name,last_name,email`);
     const profile = Array.isArray(profileData) ? profileData[0] : null;
     
-    // Récupérer la classe de l'étudiant
     let className = null;
     if (student.class_id) {
       const { data: classData } = await sbGet(`classes?id=eq.${student.class_id}&select=name`);
@@ -171,7 +162,6 @@ router.get('/me/profile', async (req: Request, res: Response, next: NextFunction
     
     const roleData = await getRoleData(req.user!.id, user.role);
     
-    // Ajouter les relations parents/enfants
     let relations = [];
     if (user.role === 'student') {
       relations = await getStudentParents(req.user!.id);
@@ -238,7 +228,7 @@ router.patch('/:id/role', authorize('admin'), async (req: Request, res: Response
   } catch (err) { return next(err); }
 });
 
-// GET /users  — admin voit tout, teacher voit seulement students
+// ✅ CORRIGÉ: GET /users avec les données de classe
 router.get('/', authorize('admin', 'teacher'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { page, limit, offset } = getPagination(req);
@@ -259,10 +249,10 @@ router.get('/', authorize('admin', 'teacher'), async (req: Request, res: Respons
     const { data } = await sbGet(url);
     const arr = Array.isArray(data) ? data : [];
 
+    // ✅ Enrichir chaque user avec roleData (contenant la classe)
     const enriched = await Promise.all(arr.map(async (user: any) => {
       const roleData = await getRoleData(user.id, user.role);
       
-      // Ajouter les relations
       let relations = [];
       if (user.role === 'student') {
         relations = await getStudentParents(user.id);
@@ -277,7 +267,7 @@ router.get('/', authorize('admin', 'teacher'), async (req: Request, res: Respons
   } catch (err) { return next(err); }
 });
 
-// ✅ CORRIGÉ: GET /users/:id avec relations parents/enfants
+// ✅ CORRIGÉ: GET /users/:id avec les données de classe et relations
 router.get('/:id', authorize('admin', 'teacher'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { data } = await sbGet(`profiles?id=eq.${req.params.id}&select=*`);
@@ -287,7 +277,6 @@ router.get('/:id', authorize('admin', 'teacher'), async (req: Request, res: Resp
     
     const roleData = await getRoleData(req.params.id, user.role);
     
-    // ✅ Ajouter les relations parents/enfants
     let relations = [];
     if (user.role === 'student') {
       relations = await getStudentParents(req.params.id);
@@ -295,7 +284,7 @@ router.get('/:id', authorize('admin', 'teacher'), async (req: Request, res: Resp
       relations = await getParentChildren(req.params.id);
     }
     
-    console.log(`📘 ${user.role} ${user.first_name} ${user.last_name} - Relations:`, relations.length);
+    console.log(`📘 ${user.role} ${user.first_name} ${user.last_name} - Classe:`, roleData?.classes?.name);
     
     return res.json(successResponse({ ...user, roleData, relations }));
   } catch (err) { return next(err); }
