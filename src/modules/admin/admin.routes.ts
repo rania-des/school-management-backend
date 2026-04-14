@@ -389,22 +389,33 @@ router.patch('/students/:id', async (req: Request, res: Response, next: NextFunc
   } catch (err) { return next(err); }
 });
 
-// ── STUDENT ENROLLMENT (affectation à une classe) ─────────────────────────────
-// ✅ CORRIGÉ: PATCH /students/:studentId/enroll avec auto-création
+// ✅ CORRIGÉ: PATCH /students/:studentId/enroll - Affectation à une classe
 router.patch('/students/:studentId/enroll', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { classId } = z.object({ classId: z.string().uuid() }).parse(req.body);
+    
+    console.log(`📚 Enrollment request: studentId=${req.params.studentId}, classId=${classId}`);
     
     // Ici studentId est le profile_id (ID de la table profiles)
     // Il faut d'abord s'assurer qu'il a une entrée dans students
     const studentTableId = await ensureStudentExists(req.params.studentId);
     
+    console.log(`📚 Student table ID: ${studentTableId}`);
+    
     // Mettre à jour la classe
     const data = await sbUpdate('students', `id=eq.${studentTableId}`, { class_id: classId });
     
     if (!data) throw new AppError('Student not found', 404);
+    
+    // Vérifier que la mise à jour a bien fonctionné
+    const updatedStudent = await sbGetOne('students', `id=eq.${studentTableId}`);
+    console.log(`📚 Updated student: class_id=${updatedStudent?.class_id}`);
+    
     return res.json(successResponse(data, 'Student enrolled in class'));
-  } catch (err) { return next(err); }
+  } catch (err) { 
+    console.error('❌ Enrollment error:', err);
+    return next(err); 
+  }
 });
 
 // ── TEACHER MANAGEMENT ────────────────────────────────────────────────────────
