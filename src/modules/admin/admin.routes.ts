@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { authenticate, authorize } from '../../middleware/auth.middleware';
 import { AppError } from '../../middleware/error.middleware';
 import { successResponse, getPagination, paginate } from '../../utils/pagination';
+import crypto from 'crypto';
 
 const router = Router();
 router.use(authenticate, authorize('admin'));
@@ -80,6 +81,60 @@ async function sbDelete(table: string, params: string): Promise<void> {
     console.error(`❌ sbDelete ${table} → ${res.status}:`, err);
     throw new Error(`DB delete failed on ${table}`);
   }
+}
+
+// ── Helpers pour créer automatiquement les entrées manquantes ─────────────────
+async function ensureStudentExists(profileId: string): Promise<string> {
+  // Chercher l'étudiant existant dans la table students
+  let student = await sbGetOne('students', `profile_id=eq.${profileId}`);
+  
+  if (!student) {
+    // Créer l'entrée student si elle n'existe pas
+    const studentNumber = `STU${Date.now()}${Math.floor(Math.random() * 1000)}`;
+    student = await sbInsert('students', {
+      id: crypto.randomUUID(),
+      profile_id: profileId,
+      student_number: studentNumber,
+      enrollment_date: new Date().toISOString().split('T')[0],
+    });
+    console.log(`✅ Auto-created student record for profile ${profileId} with ID ${student.id}`);
+  }
+  
+  return student.id;
+}
+
+async function ensureParentExists(profileId: string): Promise<string> {
+  // Chercher le parent existant dans la table parents
+  let parent = await sbGetOne('parents', `profile_id=eq.${profileId}`);
+  
+  if (!parent) {
+    // Créer l'entrée parent si elle n'existe pas
+    parent = await sbInsert('parents', {
+      id: crypto.randomUUID(),
+      profile_id: profileId,
+    });
+    console.log(`✅ Auto-created parent record for profile ${profileId} with ID ${parent.id}`);
+  }
+  
+  return parent.id;
+}
+
+async function ensureTeacherExists(profileId: string): Promise<string> {
+  // Chercher l'enseignant existant dans la table teachers
+  let teacher = await sbGetOne('teachers', `profile_id=eq.${profileId}`);
+  
+  if (!teacher) {
+    // Créer l'entrée teacher si elle n'existe pas
+    teacher = await sbInsert('teachers', {
+      id: crypto.randomUUID(),
+      profile_id: profileId,
+      employee_number: `TCH${Date.now()}${Math.floor(Math.random() * 1000)}`,
+      hire_date: new Date().toISOString().split('T')[0],
+    });
+    console.log(`✅ Auto-created teacher record for profile ${profileId} with ID ${teacher.id}`);
+  }
+  
+  return teacher.id;
 }
 
 // ── SECTIONS ──────────────────────────────────────────────────────────────────
@@ -250,6 +305,10 @@ router.post('/teacher-assignments', async (req: Request, res: Response, next: Ne
       classId: z.string().uuid(), academicYearId: z.string().uuid(),
       isMainTeacher: z.boolean().default(false),
     }).parse(req.body);
+    
+    // S'assurer que l'enseignant existe dans la table teachers
+    await ensureTeacherExists(body.teacherId);
+    
     const data = await sbInsert('teacher_assignments', {
       teacher_id: body.teacherId, subject_id: body.subjectId, class_id: body.classId,
       academic_year_id: body.academicYearId, is_main_teacher: body.isMainTeacher,
@@ -277,16 +336,30 @@ router.get('/parent-student', async (req: Request, res: Response, next: NextFunc
   } catch (err) { return next(err); }
 });
 
+// ✅ CORRIGÉ: POST /parent-student avec auto-création des entrées manquantes
 router.post('/parent-student', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = z.object({
-      parentId: z.string().uuid(), studentId: z.string().uuid(),
-      relationship: z.string().default('parent'), isPrimary: z.boolean().default(false),
+      parentId: z.string().uuid(),
+      studentId: z.string().uuid(),
+      relationship: z.string().default('parent'),
+      isPrimary: z.boolean().default(false),
     }).parse(req.body);
+    
+    // Ici parentId et studentId sont des profile_ids (IDs de la table profiles)
+    // Il faut les convertir en IDs des tables parents/students
+    const parentTableId = await ensureParentExists(body.parentId);
+    const studentTableId = await ensureStudentExists(body.studentId);
+    
+    console.log(`Liaison parent-student: parentTableId=${parentTableId}, studentTableId=${studentTableId}`);
+    
     const data = await sbInsert('parent_student', {
-      parent_id: body.parentId, student_id: body.studentId,
-      relationship: body.relationship, is_primary: body.isPrimary,
+      parent_id: parentTableId,
+      student_id: studentTableId,
+      relationship: body.relationship,
+      is_primary: body.isPrimary,
     });
+    
     return res.status(201).json(successResponse(data));
   } catch (err) { return next(err); }
 });
@@ -307,9 +380,30 @@ router.patch('/students/:id', async (req: Request, res: Response, next: NextFunc
     if (classId !== undefined) updates.class_id = classId;
     if (enrollmentDate !== undefined) updates.enrollment_date = enrollmentDate;
     
-    const data = await sbUpdate('students', `id=eq.${req.params.id}`, updates);
+    // S'assurer que l'étudiant existe dans la table students
+    const studentTableId = await ensureStudentExists(req.params.id);
+    
+    const data = await sbUpdate('students', `id=eq.${studentTableId}`, updates);
     if (!data) throw new AppError('Student not found', 404);
     return res.json(successResponse(data, 'Student updated'));
+  } catch (err) { return next(err); }
+});
+
+// ── STUDENT ENROLLMENT (affectation à une classe) ─────────────────────────────
+// ✅ CORRIGÉ: PATCH /students/:studentId/enroll avec auto-création
+router.patch('/students/:studentId/enroll', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { classId } = z.object({ classId: z.string().uuid() }).parse(req.body);
+    
+    // Ici studentId est le profile_id (ID de la table profiles)
+    // Il faut d'abord s'assurer qu'il a une entrée dans students
+    const studentTableId = await ensureStudentExists(req.params.studentId);
+    
+    // Mettre à jour la classe
+    const data = await sbUpdate('students', `id=eq.${studentTableId}`, { class_id: classId });
+    
+    if (!data) throw new AppError('Student not found', 404);
+    return res.json(successResponse(data, 'Student enrolled in class'));
   } catch (err) { return next(err); }
 });
 
@@ -322,7 +416,10 @@ router.patch('/teachers/:id', async (req: Request, res: Response, next: NextFunc
     if (employeeNumber !== undefined) updates.employee_number = employeeNumber;
     if (hireDate !== undefined) updates.hire_date = hireDate;
     
-    const data = await sbUpdate('teachers', `id=eq.${req.params.id}`, updates);
+    // S'assurer que l'enseignant existe dans la table teachers
+    const teacherTableId = await ensureTeacherExists(req.params.id);
+    
+    const data = await sbUpdate('teachers', `id=eq.${teacherTableId}`, updates);
     if (!data) throw new AppError('Teacher not found', 404);
     return res.json(successResponse(data, 'Teacher updated'));
   } catch (err) { return next(err); }
@@ -335,7 +432,10 @@ router.patch('/parents/:id', async (req: Request, res: Response, next: NextFunct
     const updates: any = {};
     if (profession !== undefined) updates.profession = profession;
     
-    const data = await sbUpdate('parents', `id=eq.${req.params.id}`, updates);
+    // S'assurer que le parent existe dans la table parents
+    const parentTableId = await ensureParentExists(req.params.id);
+    
+    const data = await sbUpdate('parents', `id=eq.${parentTableId}`, updates);
     if (!data) throw new AppError('Parent not found', 404);
     return res.json(successResponse(data, 'Parent updated'));
   } catch (err) { return next(err); }
@@ -423,16 +523,6 @@ router.patch('/establishment', async (req: Request, res: Response, next: NextFun
     if (!existing) throw new AppError('Establishment not found', 404);
     const data = await sbUpdate('establishments', `id=eq.${existing.id}`, body);
     return res.json(successResponse(data));
-  } catch (err) { return next(err); }
-});
-
-// ── STUDENT ENROLLMENT ────────────────────────────────────────────────────────
-router.patch('/students/:studentId/enroll', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { classId } = z.object({ classId: z.string().uuid() }).parse(req.body);
-    const data = await sbUpdate('students', `id=eq.${req.params.studentId}`, { class_id: classId });
-    if (!data) throw new AppError('Student not found', 404);
-    return res.json(successResponse(data, 'Student enrolled in class'));
   } catch (err) { return next(err); }
 });
 
