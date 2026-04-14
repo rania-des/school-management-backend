@@ -6,9 +6,9 @@ import { createNotification, createBulkNotifications, getClassStudentProfileIds 
 
 const router = Router();
 
-// Toutes les routes teacher nécessitent d'être authentifié + rôle teacher/admin
+// Toutes les routes parent nécessitent d'être authentifié + rôle parent
 router.use(authenticate);
-router.use(authorize('teacher', 'admin'));
+router.use(authorize('parent'));
 
 // ── Helper ────────────────────────────────────────────────────────────────────
 
@@ -18,133 +18,269 @@ function extractFirstItem(data: any): any {
   return data;
 }
 
-// Helper pour récupérer l'ID teacher depuis le profile_id
-async function getTeacherId(profileId: string): Promise<string> {
+// Helper pour récupérer les enfants d'un parent
+async function getParentChildren(profileId: string): Promise<any[]> {
   const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
   const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
   
-  const url = `${SUPABASE_URL}/rest/v1/teachers?profile_id=eq.${profileId}&select=id`;
-  console.log('🔍 getTeacherId URL:', url);
-  
-  const res = await fetch(url, {
-    headers: { 
-      'apikey': SUPABASE_KEY, 
-      'Authorization': `Bearer ${SUPABASE_KEY}` 
-    }
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/parent_student?parent_id=eq.${profileId}&select=student_id,students:student_id(id,student_number,profile_id,profiles:profile_id(first_name,last_name))`, {
+    headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
   });
   
-  const data = (await res.json()) as any[];
-  console.log('🔍 getTeacherId data:', JSON.stringify(data));
-  console.log('🔍 getTeacherId response status:', res.status);
-  console.log('🔍 getTeacherId response ok:', res.ok);
+  const data = await res.json() as any[];
+  if (!res.ok) throw new AppError('Failed to fetch children', 500);
   
-  if (!res.ok) {
-    throw new AppError(`Supabase API error: ${res.status}`, 500);
-  }
+  return (data || []).map((item: any) => ({
+    ...item,
+    student: extractFirstItem(item.students),
+  }));
+}
+
+// Helper pour récupérer les classes d'un étudiant
+async function getStudentClasses(studentId: string): Promise<any[]> {
+  const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
+  const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
   
-  if (!data?.[0]?.id) {
-    throw new AppError('Teacher not found for profile: ' + profileId, 404);
-  }
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/class_students?student_id=eq.${studentId}&select=class_id,classes:class_id(id,name,academic_year_id)`, {
+    headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
+  });
   
-  return data[0].id;
+  const data = await res.json() as any[];
+  if (!res.ok) throw new AppError('Failed to fetch student classes', 500);
+  
+  return (data || []).map((item: any) => ({
+    ...item,
+    class: extractFirstItem(item.classes),
+  }));
 }
 
 // =============================================================================
-// CLASSES & STUDENTS
+// ENFANTS (CHILDREN)
 // =============================================================================
 
-// GET /api/v1/teacher/classes — classes assignées à l'enseignant
-router.get('/classes', async (req, res, next) => {
+// GET /api/v1/parent/children — liste des enfants du parent
+router.get('/children', async (req, res, next) => {
   try {
-    console.log('🔍 /classes - req.user:', req.user?.id);
-    const teacherId = await getTeacherId(req.user!.id);
-    console.log('🔍 /classes - teacherId:', teacherId);
-
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
-
-    const resSlots = await fetch(
-      `${SUPABASE_URL}/rest/v1/schedule_slots?teacher_id=eq.${teacherId}&is_active=eq.true&select=class_id,subject_id,classes:class_id(id,name),subjects:subject_id(id,name)`,
-      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
-    );
-    const slots = (await resSlots.json()) as any[];
-    console.log('🔍 /classes - slots count:', slots?.length);
-
-    if (!resSlots.ok) throw new AppError('Failed to fetch teacher classes', 500);
-
-    const classMap = new Map();
-    for (const slot of slots || []) {
-      const key = `${slot.class_id}_${slot.subject_id}`;
-      if (!classMap.has(key)) {
-        const classItem   = extractFirstItem(slot.classes);
-        const subjectItem = extractFirstItem(slot.subjects);
-        classMap.set(key, {
-          classId:     slot.class_id,
-          className:   classItem?.name   || `Classe ${slot.class_id}`,
-          subjectId:   slot.subject_id,
-          subjectName: subjectItem?.name || 'Matière',
-        });
-      }
-    }
-
-    res.json(successResponse(Array.from(classMap.values())));
-  } catch (err) { 
-    console.error('🔍 /classes - error:', err);
-    next(err); 
-  }
+    const children = await getParentChildren(req.user!.id);
+    res.json(successResponse(children));
+  } catch (err) { next(err); }
 });
 
-// GET /api/v1/teacher/students/:classId — élèves d'une classe
-router.get('/students/:classId', async (req, res, next) => {
+// GET /api/v1/parent/children/:childId/classes — classes d'un enfant
+router.get('/children/:childId/classes', async (req, res, next) => {
   try {
-    const { classId } = req.params;
+    const { childId } = req.params;
+    const classes = await getStudentClasses(childId);
+    res.json(successResponse(classes));
+  } catch (err) { next(err); }
+});
+
+// =============================================================================
+// NOTES (GRADES)
+// =============================================================================
+
+// GET /api/v1/parent/grades?childId=&classId=&subjectId=&period=
+router.get('/grades', async (req, res, next) => {
+  try {
+    const { childId, classId, subjectId, period } = req.query;
     const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
-
-    const resStudents = await fetch(
-      `${SUPABASE_URL}/rest/v1/students?class_id=eq.${classId}&select=id,profile_id,student_number,profiles:profile_id(first_name,last_name,email,avatar_url)`,
-      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
-    );
-    const students = (await resStudents.json()) as any[];
-
-    if (!resStudents.ok) throw new AppError('Failed to fetch students', 500);
-
-    const formatted = (students || []).map((s: any) => ({
-      id:             s.id,
-      profile_id:     s.profile_id,
-      student_number: s.student_number,
-      profile:        extractFirstItem(s.profiles),
+    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
+    
+    // Vérifier que l'enfant appartient bien au parent
+    if (!childId) throw new AppError('childId est requis', 400);
+    const children = await getParentChildren(req.user!.id);
+    const hasChild = children.some((c: any) => c.student_id === childId);
+    if (!hasChild) throw new AppError('Accès non autorisé à cet enfant', 403);
+    
+    let url = `${SUPABASE_URL}/rest/v1/grades?student_id=eq.${childId}&select=*,subjects:subject_id(name),teachers:teacher_id(profiles:profile_id(first_name,last_name))&order=grade_date.desc`;
+    if (classId) url += `&class_id=eq.${classId}`;
+    if (subjectId) url += `&subject_id=eq.${subjectId}`;
+    if (period) url += `&period=eq.${period}`;
+    
+    const resData = await fetch(url, { headers: H });
+    const data = (await resData.json()) as any[];
+    
+    if (!resData.ok) throw new AppError('Failed to fetch grades', 500);
+    
+    const formatted = (data || []).map((g: any) => ({
+      ...g,
+      subject: extractFirstItem(g.subjects),
+      teacher: extractFirstItem(g.teachers)?.profiles,
     }));
-
+    
     res.json(successResponse(formatted));
   } catch (err) { next(err); }
 });
 
 // =============================================================================
-// EMPLOI DU TEMPS
+// PRÉSENCES (ATTENDANCE)
 // =============================================================================
 
-// GET /api/v1/teacher/schedule — emploi du temps de l'enseignant
-router.get('/schedule', async (req, res, next) => {
+// GET /api/v1/parent/attendance?childId=&classId=&startDate=&endDate=
+router.get('/attendance', async (req, res, next) => {
   try {
-    const teacherId = await getTeacherId(req.user!.id);
+    const { childId, classId, startDate, endDate } = req.query;
     const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
-
-    const resSlots = await fetch(
-      `${SUPABASE_URL}/rest/v1/schedule_slots?teacher_id=eq.${teacherId}&is_active=eq.true&select=*,subjects:subject_id(name,color),classes:class_id(name)&order=day_of_week,start_time`,
-      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
-    );
-    const slots = (await resSlots.json()) as any[];
-
-    if (!resSlots.ok) throw new AppError('Failed to fetch schedule', 500);
-
-    const formatted = (slots || []).map((slot: any) => ({
-      ...slot,
-      subjects: extractFirstItem(slot.subjects),
-      classes:  extractFirstItem(slot.classes),
+    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
+    
+    if (!childId) throw new AppError('childId est requis', 400);
+    
+    // Vérifier que l'enfant appartient au parent
+    const children = await getParentChildren(req.user!.id);
+    const hasChild = children.some((c: any) => c.student_id === childId);
+    if (!hasChild) throw new AppError('Accès non autorisé à cet enfant', 403);
+    
+    let url = `${SUPABASE_URL}/rest/v1/attendance?student_id=eq.${childId}&select=*,classes:class_id(name)`;
+    if (classId) url += `&class_id=eq.${classId}`;
+    if (startDate) url += `&date=gte.${startDate}`;
+    if (endDate) url += `&date=lte.${endDate}`;
+    url += `&order=date.desc`;
+    
+    const resData = await fetch(url, { headers: H });
+    const data = (await resData.json()) as any[];
+    
+    if (!resData.ok) throw new AppError('Failed to fetch attendance', 500);
+    
+    const formatted = (data || []).map((a: any) => ({
+      ...a,
+      class: extractFirstItem(a.classes),
     }));
+    
+    res.json(successResponse(formatted));
+  } catch (err) { next(err); }
+});
 
+// =============================================================================
+// DEVOIRS (ASSIGNMENTS)
+// =============================================================================
+
+// GET /api/v1/parent/assignments?childId=&classId=&subjectId=&type=
+router.get('/assignments', async (req, res, next) => {
+  try {
+    const { childId, classId, subjectId, type } = req.query;
+    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
+    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
+    
+    if (!childId) throw new AppError('childId est requis', 400);
+    
+    // Vérifier que l'enfant appartient au parent
+    const children = await getParentChildren(req.user!.id);
+    const hasChild = children.some((c: any) => c.student_id === childId);
+    if (!hasChild) throw new AppError('Accès non autorisé à cet enfant', 403);
+    
+    // Récupérer les classes de l'enfant
+    const studentClasses = await getStudentClasses(childId as string);
+    const classIds = studentClasses.map((sc: any) => sc.class_id).join(',');
+    
+    if (!classIds) {
+      return res.json(successResponse([]));
+    }
+    
+    let url = `${SUPABASE_URL}/rest/v1/assignments?class_id=in.(${classIds})&select=*,subjects:subject_id(name),classes:class_id(name)&order=due_date.asc`;
+    if (subjectId) url += `&subject_id=eq.${subjectId}`;
+    if (type) url += `&type=eq.${type}`;
+    
+    const resData = await fetch(url, { headers: H });
+    const data = (await resData.json()) as any[];
+    
+    if (!resData.ok) throw new AppError('Failed to fetch assignments', 500);
+    
+    const formatted = (data || []).map((a: any) => ({
+      ...a,
+      subject: extractFirstItem(a.subjects),
+      class: extractFirstItem(a.classes),
+    }));
+    
+    res.json(successResponse(formatted));
+  } catch (err) { next(err); }
+});
+
+// =============================================================================
+// ANNONCES (ANNOUNCEMENTS)
+// =============================================================================
+
+// GET /api/v1/parent/announcements?childId=&classId=
+router.get('/announcements', async (req, res, next) => {
+  try {
+    const { childId, classId } = req.query;
+    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
+    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
+    
+    let classFilter = '';
+    if (classId) {
+      classFilter = `&class_id=eq.${classId}`;
+    } else if (childId) {
+      // Vérifier que l'enfant appartient au parent
+      const children = await getParentChildren(req.user!.id);
+      const hasChild = children.some((c: any) => c.student_id === childId);
+      if (!hasChild) throw new AppError('Accès non autorisé à cet enfant', 403);
+      
+      const studentClasses = await getStudentClasses(childId as string);
+      const classIds = studentClasses.map((sc: any) => sc.class_id).join(',');
+      if (classIds) {
+        classFilter = `&class_id=in.(${classIds})`;
+      }
+    }
+    
+    const url = `${SUPABASE_URL}/rest/v1/announcements?or=(class_id.is.null${classFilter})&order=created_at.desc`;
+    
+    const resData = await fetch(url, { headers: H });
+    const data = (await resData.json()) as any[];
+    
+    if (!resData.ok) throw new AppError('Failed to fetch announcements', 500);
+    
+    res.json(successResponse(data || []));
+  } catch (err) { next(err); }
+});
+
+// =============================================================================
+// EMPLOI DU TEMPS (SCHEDULE)
+// =============================================================================
+
+// GET /api/v1/parent/schedule?childId=&classId=
+router.get('/schedule', async (req, res, next) => {
+  try {
+    const { childId, classId } = req.query;
+    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
+    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
+    
+    let targetClassId = classId as string;
+    
+    if (!targetClassId && childId) {
+      // Vérifier que l'enfant appartient au parent
+      const children = await getParentChildren(req.user!.id);
+      const hasChild = children.some((c: any) => c.student_id === childId);
+      if (!hasChild) throw new AppError('Accès non autorisé à cet enfant', 403);
+      
+      const studentClasses = await getStudentClasses(childId as string);
+      if (studentClasses.length === 0) {
+        return res.json(successResponse([]));
+      }
+      targetClassId = studentClasses[0].class_id;
+    }
+    
+    if (!targetClassId) {
+      throw new AppError('classId ou childId est requis', 400);
+    }
+    
+    const url = `${SUPABASE_URL}/rest/v1/schedule_slots?class_id=eq.${targetClassId}&is_active=eq.true&select=*,subjects:subject_id(name,color),teachers:teacher_id(profiles:profile_id(first_name,last_name))&order=day_of_week,start_time`;
+    
+    const resData = await fetch(url, { headers: H });
+    const data = (await resData.json()) as any[];
+    
+    if (!resData.ok) throw new AppError('Failed to fetch schedule', 500);
+    
+    const formatted = (data || []).map((slot: any) => ({
+      ...slot,
+      subject: extractFirstItem(slot.subjects),
+      teacher: extractFirstItem(slot.teachers)?.profiles,
+    }));
+    
     res.json(successResponse(formatted));
   } catch (err) { next(err); }
 });
@@ -153,524 +289,54 @@ router.get('/schedule', async (req, res, next) => {
 // STATISTIQUES
 // =============================================================================
 
-// GET /api/v1/teacher/stats — stats résumées
+// GET /api/v1/parent/stats?childId=
 router.get('/stats', async (req, res, next) => {
   try {
-    const teacherId = await getTeacherId(req.user!.id);
+    const { childId } = req.query;
     const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
-
-    const [classesRes, assignmentsRes, gradesRes] = await Promise.all([
-      fetch(`${SUPABASE_URL}/rest/v1/schedule_slots?teacher_id=eq.${teacherId}&is_active=eq.true&select=class_id`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }),
-      fetch(`${SUPABASE_URL}/rest/v1/assignments?teacher_id=eq.${teacherId}&select=id`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }),
-      fetch(`${SUPABASE_URL}/rest/v1/grades?teacher_id=eq.${teacherId}&select=id`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }),
+    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
+    
+    if (!childId) throw new AppError('childId est requis', 400);
+    
+    // Vérifier que l'enfant appartient au parent
+    const children = await getParentChildren(req.user!.id);
+    const hasChild = children.some((c: any) => c.student_id === childId);
+    if (!hasChild) throw new AppError('Accès non autorisé à cet enfant', 403);
+    
+    // Récupérer les classes de l'enfant
+    const studentClasses = await getStudentClasses(childId as string);
+    const classIds = studentClasses.map((sc: any) => sc.class_id).join(',');
+    
+    const [gradesRes, assignmentsRes, attendanceRes] = await Promise.all([
+      fetch(`${SUPABASE_URL}/rest/v1/grades?student_id=eq.${childId}&select=id`, { headers: H }),
+      classIds ? fetch(`${SUPABASE_URL}/rest/v1/assignments?class_id=in.(${classIds})&select=id`, { headers: H }) : Promise.resolve({ ok: true, json: async () => [] }),
+      fetch(`${SUPABASE_URL}/rest/v1/attendance?student_id=eq.${childId}&select=id,status`, { headers: H }),
     ]);
-
-    const classesData = (await classesRes.json()) as any[];
-    const assignmentsData = (await assignmentsRes.json()) as any[];
+    
     const gradesData = (await gradesRes.json()) as any[];
-
+    const assignmentsData = classIds ? (await assignmentsRes.json()) as any[] : [];
+    const attendanceData = (await attendanceRes.json()) as any[];
+    
+    const presentCount = (attendanceData || []).filter((a: any) => a.status === 'present').length;
+    const absentCount = (attendanceData || []).filter((a: any) => a.status === 'absent').length;
+    const lateCount = (attendanceData || []).filter((a: any) => a.status === 'late').length;
+    
+    // Calcul de la moyenne des notes
+    const scores = (gradesData || [])
+      .filter((g: any) => g.score !== null && g.max_score)
+      .map((g: any) => (g.score / g.max_score) * 20);
+    const average = scores.length > 0 ? (scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(2) : null;
+    
     res.json(successResponse({
-      totalClasses:     classesData?.length || 0,
+      totalGrades: gradesData?.length || 0,
       totalAssignments: assignmentsData?.length || 0,
-      totalGrades:      gradesData?.length || 0,
+      totalAttendance: attendanceData?.length || 0,
+      presentCount,
+      absentCount,
+      lateCount,
+      averageGrade: average,
     }));
-  } catch (err) { next(err); }
-});
-
-// =============================================================================
-// NOTES (GRADES) - BUG 1 CORRIGÉ
-// =============================================================================
-
-// GET /api/v1/teacher/grades?classId=&subjectId=&period=
-router.get('/grades', async (req, res, next) => {
-  try {
-    const teacherId = await getTeacherId(req.user!.id);
-    const { classId, subjectId, period } = req.query;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
-
-    let url = `${SUPABASE_URL}/rest/v1/grades?teacher_id=eq.${teacherId}&select=*,students:student_id(id,student_number,profiles:profile_id(first_name,last_name)),subjects:subject_id(name)&order=created_at.desc`;
-    if (classId)   url += `&class_id=eq.${classId}`;
-    if (subjectId) url += `&subject_id=eq.${subjectId}`;
-    if (period)    url += `&period=eq.${period}`;
-
-    const resData = await fetch(url, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
-    const data = (await resData.json()) as any[];
-
-    if (!resData.ok) throw new AppError('Failed to fetch grades', 500);
-
-    const formatted = (data || []).map((g: any) => ({
-      ...g,
-      student: extractFirstItem(g.students),
-      subject: extractFirstItem(g.subjects),
-    }));
-
-    res.json(successResponse(formatted));
-  } catch (err) { next(err); }
-});
-
-// ✅ BUG 1 CORRIGÉ: POST /api/v1/teacher/grades — ajouter une note (colonnes correctes)
-router.post('/grades', async (req, res, next) => {
-  try {
-    const teacherId = await getTeacherId(req.user!.id);
-    const { 
-      studentId, 
-      classId, 
-      subjectId, 
-      value, 
-      maxValue, 
-      coefficient, 
-      title, 
-      period, 
-      type, 
-      comment, 
-      gradeDate,
-      academicYearId 
-    } = req.body;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
-
-    // ✅ Validation avec les bons champs
-    if (!studentId || !classId || !subjectId || value === undefined || !period || !title) {
-      throw new AppError('studentId, classId, subjectId, value, period et title sont requis', 400);
-    }
-
-    const finalMaxValue = maxValue ? Number(maxValue) : 20;
-    const finalCoefficient = coefficient ? Number(coefficient) : 1;
-    const finalDate = gradeDate || new Date().toISOString().split('T')[0];
-    const finalTitle = title || type || 'Évaluation';
-
-    // ✅ Colonnes correctes selon le schéma SQL (score, max_score, coefficient, title, description)
-    const resInsert = await fetch(`${SUPABASE_URL}/rest/v1/grades`, {
-      method: 'POST',
-      headers: { 
-        'apikey': SUPABASE_KEY, 
-        'Authorization': `Bearer ${SUPABASE_KEY}`, 
-        'Content-Type': 'application/json', 
-        'Prefer': 'return=representation' 
-      },
-      body: JSON.stringify({
-        teacher_id: teacherId,
-        student_id: studentId,
-        class_id:   classId,
-        subject_id: subjectId,
-        score:      Number(value),
-        max_score:  finalMaxValue,
-        coefficient: finalCoefficient,
-        title:      finalTitle,
-        description: comment || null,
-        period:     period,
-        grade_date: finalDate,
-      })
-    });
-    const dataArr = (await resInsert.json()) as any[];
-    const data = dataArr[0];
-
-    if (!resInsert.ok) throw new AppError(`Failed to create grade: ${resInsert.status}`, 500);
-
-    // Notification à l'élève
-    const resStudent = await fetch(`${SUPABASE_URL}/rest/v1/students?id=eq.${studentId}&select=profile_id`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
-    const studentArr = (await resStudent.json()) as any[];
-    const student = studentArr[0];
-
-    if (student?.profile_id) {
-      await createNotification({
-        recipientId: student.profile_id,
-        type:        'grade',
-        title:       'Nouvelle note ajoutée',
-        body:        `Une note de ${value}/${finalMaxValue} a été ajoutée pour ${finalTitle}.`,
-        data:        { gradeId: data.id },
-      });
-    }
-
-    res.status(201).json(successResponse(data, 'Note ajoutée avec succès'));
-  } catch (err) { next(err); }
-});
-
-// PUT /api/v1/teacher/grades/:gradeId — modifier une note
-router.put('/grades/:gradeId', async (req, res, next) => {
-  try {
-    const teacherId = await getTeacherId(req.user!.id);
-    const { gradeId } = req.params;
-    const { value, maxValue, coefficient, title, comment, period, gradeDate } = req.body;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
-
-    const updateBody: any = {};
-    if (value !== undefined) updateBody.score = Number(value);
-    if (maxValue !== undefined) updateBody.max_score = Number(maxValue);
-    if (coefficient !== undefined) updateBody.coefficient = Number(coefficient);
-    if (title !== undefined) updateBody.title = title;
-    if (comment !== undefined) updateBody.description = comment;
-    if (period !== undefined) updateBody.period = period;
-    if (gradeDate !== undefined) updateBody.grade_date = gradeDate;
-
-    const resUpdate = await fetch(`${SUPABASE_URL}/rest/v1/grades?id=eq.${gradeId}&teacher_id=eq.${teacherId}`, {
-      method: 'PATCH',
-      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
-      body: JSON.stringify(updateBody)
-    });
-    const dataArr = (await resUpdate.json()) as any[];
-    const data = dataArr[0];
-
-    if (!resUpdate.ok || !data) throw new AppError('Grade not found or not authorized', 404);
-
-    res.json(successResponse(data, 'Note modifiée avec succès'));
-  } catch (err) { next(err); }
-});
-
-// DELETE /api/v1/teacher/grades/:gradeId
-router.delete('/grades/:gradeId', async (req, res, next) => {
-  try {
-    const teacherId = await getTeacherId(req.user!.id);
-    const { gradeId } = req.params;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
-
-    const resDelete = await fetch(`${SUPABASE_URL}/rest/v1/grades?id=eq.${gradeId}&teacher_id=eq.${teacherId}`, {
-      method: 'DELETE',
-      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
-    });
-
-    if (!resDelete.ok) throw new AppError('Failed to delete grade', 500);
-
-    res.json(successResponse(null, 'Note supprimée'));
-  } catch (err) { next(err); }
-});
-
-// =============================================================================
-// DEVOIRS (ASSIGNMENTS)
-// =============================================================================
-
-// GET /api/v1/teacher/assignments?classId=&subjectId=&type=
-router.get('/assignments', async (req, res, next) => {
-  try {
-    const teacherId = await getTeacherId(req.user!.id);
-    const { classId, subjectId, type } = req.query;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
-    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
-    
-    let url = `${SUPABASE_URL}/rest/v1/assignments?teacher_id=eq.${teacherId}&select=*&order=due_date`;
-    if (classId)   url += `&class_id=eq.${classId}`;
-    if (subjectId) url += `&subject_id=eq.${subjectId}`;
-    if (type)      url += `&type=eq.${type}`;
-    
-    const resData = await fetch(url, { headers: H });
-    const data = (await resData.json()) as any[];
-    
-    if (!resData.ok) throw new AppError('Failed to fetch assignments', 500);
-    
-    res.json(successResponse(data || []));
-  } catch (err) { next(err); }
-});
-
-// ✅ BUG 3 CORRIGÉ: POST /api/v1/teacher/assignments — créer un devoir avec notifications
-router.post('/assignments', async (req, res, next) => {
-  try {
-    const teacherId = await getTeacherId(req.user!.id);
-    const { classId, subjectId, title, description, dueDate, type, maxScore, fileData, fileName, academicYearId } = req.body;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
-    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' };
-
-    if (!classId || !subjectId || !title || !dueDate) {
-      throw new AppError('classId, subjectId, title et dueDate sont requis', 400);
-    }
-
-    const resInsert = await fetch(`${SUPABASE_URL}/rest/v1/assignments`, {
-      method: 'POST',
-      headers: H,
-      body: JSON.stringify({
-        teacher_id:  teacherId,
-        class_id:    classId,
-        subject_id:  subjectId,
-        title,
-        description: description || null,
-        due_date:    dueDate,
-        type:        type || 'homework',
-        max_score:   maxScore ? Number(maxScore) : null,
-        file_data:   fileData || null,
-        file_name:   fileName || null,
-      })
-    });
-    const dataArr = (await resInsert.json()) as any[];
-    const data = dataArr[0];
-
-    if (!resInsert.ok) throw new AppError(`Failed to create assignment: ${resInsert.status}`, 500);
-
-    // ✅ BUG 3 CORRIGÉ: Notification en masse à tous les élèves de la classe
-    const studentProfileIds = await getClassStudentProfileIds(classId);
-    if (studentProfileIds.length > 0) {
-      const notificationTitle = type === 'course' ? 'Nouveau cours publié' : 'Nouveau devoir';
-      const notificationBody = type === 'course'
-        ? `${title} - ${description || 'Consultez le nouveau cours'}`
-        : `${title} — À rendre pour le ${new Date(dueDate).toLocaleDateString('fr-FR')}`;
-      
-      await createBulkNotifications(studentProfileIds, {
-        type:  type === 'course' ? 'course' : 'assignment',
-        title: notificationTitle,
-        body:  notificationBody,
-        data:  { assignmentId: data.id, type: type || 'homework' },
-      });
-    }
-
-    res.status(201).json(successResponse(data, type === 'course' ? 'Cours créé avec succès' : 'Devoir créé avec succès'));
-  } catch (err) { next(err); }
-});
-
-// PUT /api/v1/teacher/assignments/:assignmentId
-router.put('/assignments/:assignmentId', async (req, res, next) => {
-  try {
-    const teacherId = await getTeacherId(req.user!.id);
-    const { assignmentId } = req.params;
-    const { title, description, dueDate, type, maxScore } = req.body;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
-    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' };
-
-    const updateBody: any = { title, description, due_date: dueDate, type };
-    if (maxScore !== undefined) updateBody.max_score = Number(maxScore);
-
-    const resUpdate = await fetch(`${SUPABASE_URL}/rest/v1/assignments?id=eq.${assignmentId}&teacher_id=eq.${teacherId}`, {
-      method: 'PATCH',
-      headers: H,
-      body: JSON.stringify(updateBody)
-    });
-    const dataArr = (await resUpdate.json()) as any[];
-    const data = dataArr[0];
-
-    if (!resUpdate.ok || !data) throw new AppError('Assignment not found or not authorized', 404);
-
-    res.json(successResponse(data, 'Devoir modifié'));
-  } catch (err) { next(err); }
-});
-
-// DELETE /api/v1/teacher/assignments/:assignmentId
-router.delete('/assignments/:assignmentId', async (req, res, next) => {
-  try {
-    const teacherId = await getTeacherId(req.user!.id);
-    const { assignmentId } = req.params;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
-    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
-
-    const resDelete = await fetch(`${SUPABASE_URL}/rest/v1/assignments?id=eq.${assignmentId}&teacher_id=eq.${teacherId}`, {
-      method: 'DELETE',
-      headers: H
-    });
-
-    if (!resDelete.ok) throw new AppError('Failed to delete assignment', 500);
-
-    res.json(successResponse(null, 'Devoir supprimé'));
-  } catch (err) { next(err); }
-});
-
-// GET /api/v1/teacher/assignments/:assignmentId/submissions — soumissions d'un devoir
-router.get('/assignments/:assignmentId/submissions', async (req, res, next) => {
-  try {
-    const teacherId = await getTeacherId(req.user!.id);
-    const { assignmentId } = req.params;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
-    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
-
-    // Vérifier que le devoir appartient à l'enseignant
-    const resCheck = await fetch(`${SUPABASE_URL}/rest/v1/assignments?id=eq.${assignmentId}&teacher_id=eq.${teacherId}&select=id`, { headers: H });
-    const checkArr = (await resCheck.json()) as any[];
-    const assignment = checkArr[0];
-
-    if (!assignment) throw new AppError('Assignment not found or not authorized', 404);
-
-    const resData = await fetch(`${SUPABASE_URL}/rest/v1/submissions?assignment_id=eq.${assignmentId}&select=*,students:student_id(id,student_number,profiles:profile_id(first_name,last_name))`, { headers: H });
-    const data = (await resData.json()) as any[];
-
-    if (!resData.ok) throw new AppError('Failed to fetch submissions', 500);
-
-    const formatted = (data || []).map((s: any) => ({ ...s, student: extractFirstItem(s.students) }));
-
-    res.json(successResponse(formatted));
-  } catch (err) { next(err); }
-});
-
-// PATCH /api/v1/teacher/submissions/:submissionId/grade — noter une soumission
-router.patch('/submissions/:submissionId/grade', async (req, res, next) => {
-  try {
-    const { submissionId } = req.params;
-    const { score, feedback } = req.body;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
-    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' };
-
-    if (score === undefined) throw new AppError('score est requis', 400);
-
-    const resUpdate = await fetch(`${SUPABASE_URL}/rest/v1/submissions?id=eq.${submissionId}`, {
-      method: 'PATCH',
-      headers: H,
-      body: JSON.stringify({ score: Number(score), feedback: feedback || null, status: 'graded' })
-    });
-    const dataArr = (await resUpdate.json()) as any[];
-    const data = dataArr[0];
-
-    if (!resUpdate.ok) throw new AppError('Failed to grade submission', 500);
-
-    res.json(successResponse(data, 'Soumission notée'));
-  } catch (err) { next(err); }
-});
-
-// =============================================================================
-// PRÉSENCES (ATTENDANCE) - BUG 2 CORRIGÉ
-// =============================================================================
-
-// ✅ BUG 2 CORRIGÉ: POST /api/v1/teacher/attendance — enregistrer les présences
-router.post('/attendance', async (req, res, next) => {
-  try {
-    const teacherId = await getTeacherId(req.user!.id);
-    const { records } = req.body;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
-    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates,return=representation' };
-
-    if (!Array.isArray(records) || records.length === 0) {
-      throw new AppError('records[] est requis', 400);
-    }
-
-    // ✅ BUG 2 CORRIGÉ: Utilisation de schedule_slot_id pour la contrainte UNIQUE
-    // et champ reason au lieu de note
-    const rows = records.map((r: any) => ({
-      teacher_id: teacherId,
-      student_id: r.studentId,
-      class_id:   r.classId,
-      schedule_slot_id: r.scheduleSlotId || null,
-      status:     r.status,
-      date:       r.date,
-      reason:     r.note || r.reason || null,  // ✅ champ DB s'appelle reason
-    }));
-
-    // ✅ BUG 2 CORRIGÉ: on_conflict avec student_id, date, schedule_slot_id
-    const resUpsert = await fetch(`${SUPABASE_URL}/rest/v1/attendance?on_conflict=student_id,date,schedule_slot_id`, {
-      method: 'POST',
-      headers: H,
-      body: JSON.stringify(rows)
-    });
-    const data = (await resUpsert.json()) as any[];
-
-    if (!resUpsert.ok) throw new AppError(`Failed to save attendance: ${resUpsert.status}`, 500);
-
-    // Notifications aux parents pour les absences
-    const absents = records.filter((r: any) => r.status === 'absent');
-    for (const absent of absents) {
-      const resStudent = await fetch(`${SUPABASE_URL}/rest/v1/students?id=eq.${absent.studentId}&select=id,profile_id`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
-      const studentArr = (await resStudent.json()) as any[];
-      const student = studentArr[0];
-
-      if (student) {
-        const resParents = await fetch(`${SUPABASE_URL}/rest/v1/parent_student?student_id=eq.${student.id}&select=parents:parent_id(profile_id)`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
-        const parentLinks = (await resParents.json()) as any[];
-
-        const parentProfileIds = (parentLinks || [])
-          .map((pl: any) => extractFirstItem(pl.parents)?.profile_id)
-          .filter(Boolean);
-
-        if (parentProfileIds.length > 0) {
-          await createBulkNotifications(parentProfileIds, {
-            type:  'absence',
-            title: 'Absence signalée',
-            body:  `Votre enfant a été marqué absent le ${absent.date}.`,
-            data:  { studentId: student.id, date: absent.date },
-          });
-        }
-      }
-    }
-
-    res.status(201).json(successResponse(data, 'Présences enregistrées'));
-  } catch (err) { next(err); }
-});
-
-// =============================================================================
-// ANNONCES (ANNOUNCEMENTS)
-// =============================================================================
-
-// GET /api/v1/teacher/announcements
-router.get('/announcements', async (req, res, next) => {
-  try {
-    const { classId } = req.query;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
-    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
-
-    let url = `${SUPABASE_URL}/rest/v1/announcements?or=(author_id.eq.${req.user!.id},target_role.eq.teacher,target_role.is.null)&order=created_at.desc`;
-    if (classId) url += `&class_id=eq.${classId}`;
-
-    const resData = await fetch(url, { headers: H });
-    const data = (await resData.json()) as any[];
-
-    if (!resData.ok) throw new AppError('Failed to fetch announcements', 500);
-
-    res.json(successResponse(data || []));
-  } catch (err) { next(err); }
-});
-
-// POST /api/v1/teacher/announcements
-router.post('/announcements', async (req, res, next) => {
-  try {
-    const { title, content, classId, targetRole } = req.body;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
-    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' };
-
-    if (!title || !content) throw new AppError('title et content sont requis', 400);
-
-    const resInsert = await fetch(`${SUPABASE_URL}/rest/v1/announcements`, {
-      method: 'POST',
-      headers: H,
-      body: JSON.stringify({
-        author_id:   req.user!.id,
-        title,
-        content,
-        class_id:    classId    || null,
-        target_role: targetRole || null,
-      })
-    });
-    const dataArr = (await resInsert.json()) as any[];
-    const data = dataArr[0];
-
-    if (!resInsert.ok) throw new AppError(`Failed to create announcement`, 500);
-
-    // Si une classe est ciblée, notifier les élèves
-    if (classId) {
-      const studentProfileIds = await getClassStudentProfileIds(classId);
-      if (studentProfileIds.length > 0) {
-        await createBulkNotifications(studentProfileIds, {
-          type:  'announcement',
-          title: `Nouvelle annonce : ${title}`,
-          body:  content.substring(0, 100),
-          data:  { announcementId: data.id },
-        });
-      }
-    }
-
-    res.status(201).json(successResponse(data, 'Annonce publiée'));
-  } catch (err) { next(err); }
-});
-
-// DELETE /api/v1/teacher/announcements/:announcementId
-router.delete('/announcements/:announcementId', async (req, res, next) => {
-  try {
-    const { announcementId } = req.params;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
-    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
-
-    const resDelete = await fetch(`${SUPABASE_URL}/rest/v1/announcements?id=eq.${announcementId}&author_id=eq.${req.user!.id}`, {
-      method: 'DELETE',
-      headers: H
-    });
-
-    if (!resDelete.ok) throw new AppError('Failed to delete announcement', 500);
-
-    res.json(successResponse(null, 'Annonce supprimée'));
   } catch (err) { next(err); }
 });
 
@@ -678,7 +344,7 @@ router.delete('/announcements/:announcementId', async (req, res, next) => {
 // MESSAGERIE
 // =============================================================================
 
-// GET /api/v1/teacher/messages/conversations
+// GET /api/v1/parent/messages/conversations
 router.get('/messages/conversations', async (req, res, next) => {
   try {
     const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
@@ -686,7 +352,7 @@ router.get('/messages/conversations', async (req, res, next) => {
     const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
     const userId = req.user!.id;
 
-    // 1. Récupère les conversation_ids où le prof participe
+    // 1. Récupère les conversation_ids où le parent participe
     const partRes = await fetch(
       `${SUPABASE_URL}/rest/v1/conversation_participants?profile_id=eq.${userId}&select=conversation_id`,
       { headers: H }
@@ -717,7 +383,7 @@ router.get('/messages/conversations', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// GET /api/v1/teacher/messages/:userId — conversation avec un utilisateur
+// GET /api/v1/parent/messages/:userId — conversation avec un utilisateur
 router.get('/messages/:userId', async (req, res, next) => {
   try {
     const { userId } = req.params;
@@ -745,7 +411,7 @@ router.get('/messages/:userId', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// POST /api/v1/teacher/messages — envoyer un message
+// POST /api/v1/parent/messages — envoyer un message
 router.post('/messages', async (req, res, next) => {
   try {
     const { receiverId, content } = req.body;
@@ -784,50 +450,89 @@ router.post('/messages', async (req, res, next) => {
 });
 
 // =============================================================================
-// PROFIL ENSEIGNANT
+// NOTIFICATIONS
 // =============================================================================
 
-// GET /api/v1/teacher/profile
+// GET /api/v1/parent/notifications
+router.get('/notifications', async (req, res, next) => {
+  try {
+    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
+    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
+    
+    const url = `${SUPABASE_URL}/rest/v1/notifications?user_id=eq.${req.user!.id}&order=created_at.desc`;
+    const resData = await fetch(url, { headers: H });
+    const data = (await resData.json()) as any[];
+    
+    if (!resData.ok) throw new AppError('Failed to fetch notifications', 500);
+    
+    res.json(successResponse(data || []));
+  } catch (err) { next(err); }
+});
+
+// PATCH /api/v1/parent/notifications/:id/read — marquer une notification comme lue
+router.patch('/notifications/:id/read', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
+    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' };
+    
+    const resUpdate = await fetch(`${SUPABASE_URL}/rest/v1/notifications?id=eq.${id}&user_id=eq.${req.user!.id}`, {
+      method: 'PATCH',
+      headers: H,
+      body: JSON.stringify({ is_read: true })
+    });
+    const dataArr = (await resUpdate.json()) as any[];
+    const data = dataArr[0];
+    
+    if (!resUpdate.ok) throw new AppError('Failed to mark notification as read', 500);
+    
+    res.json(successResponse(data, 'Notification marquée comme lue'));
+  } catch (err) { next(err); }
+});
+
+// =============================================================================
+// PROFIL PARENT
+// =============================================================================
+
+// GET /api/v1/parent/profile
 router.get('/profile', async (req, res, next) => {
   try {
     const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
     const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
-
+    
     const resProfile = await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${req.user!.id}&select=*`, { headers: H });
     const profileArr = (await resProfile.json()) as any[];
     const profile = profileArr[0];
-
+    
     if (!resProfile.ok || !profile) throw new AppError('Profile not found', 404);
-
-    const resTeacher = await fetch(`${SUPABASE_URL}/rest/v1/teachers?profile_id=eq.${req.user!.id}&select=*`, { headers: H });
-    const teacherArr = (await resTeacher.json()) as any[];
-    const teacher = teacherArr[0];
-
-    res.json(successResponse({ ...profile, teacherData: teacher || null }));
+    
+    res.json(successResponse(profile));
   } catch (err) { next(err); }
 });
 
-// PATCH /api/v1/teacher/profile — mettre à jour le profil
+// PATCH /api/v1/parent/profile — mettre à jour le profil
 router.patch('/profile', async (req, res, next) => {
   try {
     const { firstName, lastName, phone, address, gender, avatarUrl } = req.body;
     const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
     const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' };
-
+    
     const updates: Record<string, any> = {};
-    if (firstName !== undefined) updates.first_name  = firstName;
-    if (lastName  !== undefined) updates.last_name   = lastName;
-    if (phone     !== undefined) updates.phone       = phone;
-    if (address   !== undefined) updates.address     = address;
-    if (gender    !== undefined) updates.gender      = gender;
-    if (avatarUrl !== undefined) updates.avatar_url  = avatarUrl;
-
+    if (firstName !== undefined) updates.first_name = firstName;
+    if (lastName !== undefined) updates.last_name = lastName;
+    if (phone !== undefined) updates.phone = phone;
+    if (address !== undefined) updates.address = address;
+    if (gender !== undefined) updates.gender = gender;
+    if (avatarUrl !== undefined) updates.avatar_url = avatarUrl;
+    
     if (Object.keys(updates).length === 0) {
       throw new AppError('Aucune donnée à mettre à jour', 400);
     }
-
+    
     const resUpdate = await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${req.user!.id}`, {
       method: 'PATCH',
       headers: H,
@@ -835,9 +540,9 @@ router.patch('/profile', async (req, res, next) => {
     });
     const dataArr = (await resUpdate.json()) as any[];
     const data = dataArr[0];
-
+    
     if (!resUpdate.ok) throw new AppError('Failed to update profile', 500);
-
+    
     res.json(successResponse(data, 'Profil mis à jour'));
   } catch (err) { next(err); }
 });
