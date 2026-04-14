@@ -18,13 +18,12 @@ function extractFirstItem(data: any): any {
   return data;
 }
 
-// Helper pour récupérer l'ID teacher depuis le profile_id (clé hardcodée temporairement)
+// Helper pour récupérer l'ID teacher depuis le profile_id
 async function getTeacherId(profileId: string): Promise<string> {
   const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
   const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
   
   const url = `${SUPABASE_URL}/rest/v1/teachers?profile_id=eq.${profileId}&select=id`;
-  console.log('🔍 getTeacherId URL:', url);
   
   const res = await fetch(url, {
     headers: { 
@@ -34,9 +33,6 @@ async function getTeacherId(profileId: string): Promise<string> {
   });
   
   const data = (await res.json()) as any[];
-  console.log('🔍 getTeacherId data:', JSON.stringify(data));
-  console.log('🔍 getTeacherId response status:', res.status);
-  console.log('🔍 getTeacherId response ok:', res.ok);
   
   if (!res.ok) {
     throw new AppError(`Supabase API error: ${res.status}`, 500);
@@ -56,9 +52,7 @@ async function getTeacherId(profileId: string): Promise<string> {
 // GET /api/v1/teacher/classes — classes assignées à l'enseignant
 router.get('/classes', async (req, res, next) => {
   try {
-    console.log('🔍 /classes - req.user:', req.user?.id);
     const teacherId = await getTeacherId(req.user!.id);
-    console.log('🔍 /classes - teacherId:', teacherId);
 
     const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
@@ -68,7 +62,6 @@ router.get('/classes', async (req, res, next) => {
       { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
     );
     const slots = (await resSlots.json()) as any[];
-    console.log('🔍 /classes - slots count:', slots?.length);
 
     if (!resSlots.ok) throw new AppError('Failed to fetch teacher classes', 500);
 
@@ -89,7 +82,6 @@ router.get('/classes', async (req, res, next) => {
 
     res.json(successResponse(Array.from(classMap.values())));
   } catch (err) { 
-    console.error('🔍 /classes - error:', err);
     next(err); 
   }
 });
@@ -179,7 +171,7 @@ router.get('/stats', async (req, res, next) => {
 });
 
 // =============================================================================
-// NOTES (GRADES)
+// NOTES (GRADES) - BUG 1 CORRIGÉ
 // =============================================================================
 
 // GET /api/v1/teacher/grades?classId=&subjectId=&period=
@@ -210,7 +202,7 @@ router.get('/grades', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// POST /api/v1/teacher/grades — ajouter une note
+// ✅ BUG 1 CORRIGÉ: POST /api/v1/teacher/grades — ajouter une note
 router.post('/grades', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
@@ -222,25 +214,34 @@ router.post('/grades', async (req, res, next) => {
       throw new AppError('studentId, classId, subjectId, value et period sont requis', 400);
     }
 
+    // ✅ Colonnes correctes selon le schéma SQL
     const resInsert = await fetch(`${SUPABASE_URL}/rest/v1/grades`, {
       method: 'POST',
-      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
+      headers: { 
+        'apikey': SUPABASE_KEY, 
+        'Authorization': `Bearer ${SUPABASE_KEY}`, 
+        'Content-Type': 'application/json', 
+        'Prefer': 'return=representation' 
+      },
       body: JSON.stringify({
-        teacher_id: teacherId,
-        student_id: studentId,
-        class_id:   classId,
-        subject_id: subjectId,
-        value:      Number(value),
-        max_value:  maxValue ? Number(maxValue) : 20,
-        period,
-        type:       type || 'exam',
-        comment:    comment || null,
+        teacher_id:       teacherId,
+        student_id:       studentId,
+        class_id:         classId,
+        subject_id:       subjectId,
+        academic_year_id: req.body.academicYearId || null,
+        score:            Number(value ?? req.body.score),
+        max_score:        maxValue ? Number(maxValue) : (req.body.maxScore ? Number(req.body.maxScore) : 20),
+        coefficient:      req.body.coefficient ? Number(req.body.coefficient) : 1,
+        title:            req.body.title || type || 'Note',
+        period:           period,
+        grade_date:       req.body.gradeDate || new Date().toISOString().split('T')[0],
+        description:      comment || req.body.description || null,
       })
     });
     const dataArr = (await resInsert.json()) as any[];
     const data = dataArr[0];
 
-    if (!resInsert.ok) throw new AppError(`Failed to create grade`, 500);
+    if (!resInsert.ok) throw new AppError(`Failed to create grade: ${resInsert.status}`, 500);
 
     // Notification à l'élève
     const resStudent = await fetch(`${SUPABASE_URL}/rest/v1/students?id=eq.${studentId}&select=profile_id`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
@@ -270,9 +271,9 @@ router.put('/grades/:gradeId', async (req, res, next) => {
     const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
 
-    const updateBody: any = { comment };
-    if (value    !== undefined) updateBody.value     = Number(value);
-    if (maxValue !== undefined) updateBody.max_value = Number(maxValue);
+    const updateBody: any = { description: comment };
+    if (value !== undefined) updateBody.score = Number(value);
+    if (maxValue !== undefined) updateBody.max_score = Number(maxValue);
 
     const resUpdate = await fetch(`${SUPABASE_URL}/rest/v1/grades?id=eq.${gradeId}&teacher_id=eq.${teacherId}`, {
       method: 'PATCH',
@@ -308,7 +309,7 @@ router.delete('/grades/:gradeId', async (req, res, next) => {
 });
 
 // =============================================================================
-// DEVOIRS (ASSIGNMENTS) - VERSION CORRIGÉE SANS JOINS
+// DEVOIRS (ASSIGNMENTS) - BUG 3 CORRIGÉ
 // =============================================================================
 
 // GET /api/v1/teacher/assignments?classId=&subjectId=&type=
@@ -334,7 +335,7 @@ router.get('/assignments', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// POST /api/v1/teacher/assignments — créer un devoir
+// ✅ BUG 3 CORRIGÉ: POST /api/v1/teacher/assignments — créer un devoir
 router.post('/assignments', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
@@ -343,41 +344,48 @@ router.post('/assignments', async (req, res, next) => {
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
     const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' };
 
-    if (!classId || !subjectId || !title || !dueDate) {
-      throw new AppError('classId, subjectId, title et dueDate sont requis', 400);
+    if (!classId || !subjectId || !title) {
+      throw new AppError('classId, subjectId et title sont requis', 400);
     }
 
+    // ✅ Ajout de academic_year_id et points (au lieu de max_score)
     const resInsert = await fetch(`${SUPABASE_URL}/rest/v1/assignments`, {
       method: 'POST',
       headers: H,
       body: JSON.stringify({
-        teacher_id:  teacherId,
-        class_id:    classId,
-        subject_id:  subjectId,
+        teacher_id:       teacherId,
+        class_id:         classId,
+        subject_id:       subjectId,
+        academic_year_id: req.body.academicYearId || null,
         title,
-        description: description || null,
-        due_date:    dueDate,
-        type:        type || 'homework',
-        max_score:   maxScore ? Number(maxScore) : null,
+        description:      description || null,
+        due_date:         dueDate || null,
+        type:             type || 'homework',
+        points:           maxScore ? Number(maxScore) : null,
       })
     });
     const dataArr = (await resInsert.json()) as any[];
     const data = dataArr[0];
 
-    if (!resInsert.ok) throw new AppError(`Failed to create assignment`, 500);
+    if (!resInsert.ok) throw new AppError(`Failed to create assignment: ${resInsert.status}`, 500);
 
     // Notification en masse à tous les élèves de la classe
     const studentProfileIds = await getClassStudentProfileIds(classId);
     if (studentProfileIds.length > 0) {
+      const notificationTitle = type === 'course' ? 'Nouveau cours publié' : 'Nouveau devoir';
+      const notificationBody = type === 'course'
+        ? `${title} - ${description || 'Consultez le nouveau cours'}`
+        : `${title}${dueDate ? ` — À rendre pour le ${new Date(dueDate).toLocaleDateString('fr-FR')}` : ''}`;
+      
       await createBulkNotifications(studentProfileIds, {
-        type:  'assignment',
-        title: `Nouveau devoir : ${title}`,
-        body:  `À rendre pour le ${new Date(dueDate).toLocaleDateString('fr-FR')}`,
-        data:  { assignmentId: data.id },
+        type:  type === 'course' ? 'course' : 'assignment',
+        title: notificationTitle,
+        body:  notificationBody,
+        data:  { assignmentId: data.id, type: type || 'homework' },
       });
     }
 
-    res.status(201).json(successResponse(data, 'Devoir créé avec succès'));
+    res.status(201).json(successResponse(data, type === 'course' ? 'Cours créé avec succès' : 'Devoir créé avec succès'));
   } catch (err) { next(err); }
 });
 
@@ -392,7 +400,7 @@ router.put('/assignments/:assignmentId', async (req, res, next) => {
     const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' };
 
     const updateBody: any = { title, description, due_date: dueDate, type };
-    if (maxScore !== undefined) updateBody.max_score = Number(maxScore);
+    if (maxScore !== undefined) updateBody.points = Number(maxScore);
 
     const resUpdate = await fetch(`${SUPABASE_URL}/rest/v1/assignments?id=eq.${assignmentId}&teacher_id=eq.${teacherId}`, {
       method: 'PATCH',
@@ -481,39 +489,54 @@ router.patch('/submissions/:submissionId/grade', async (req, res, next) => {
 });
 
 // =============================================================================
-// PRÉSENCES (ATTENDANCE)
+// PRÉSENCES (ATTENDANCE) - BUG 2 CORRIGÉ
 // =============================================================================
 
-// POST /api/v1/teacher/attendance — enregistrer les présences (tableau)
+// ✅ BUG 2 CORRIGÉ: POST /api/v1/teacher/attendance — enregistrer les présences
 router.post('/attendance', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
     const { records } = req.body;
     const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
-    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates,return=representation' };
+    // ✅ Header avec upsert
+    const H = { 
+      'apikey': SUPABASE_KEY, 
+      'Authorization': `Bearer ${SUPABASE_KEY}`, 
+      'Content-Type': 'application/json', 
+      'Prefer': 'resolution=merge-duplicates,return=representation',
+      'X-Upsert': 'true'
+    };
 
     if (!Array.isArray(records) || records.length === 0) {
       throw new AppError('records[] est requis', 400);
     }
 
+    // ✅ Utilisation de schedule_slot_id et reason (au lieu de note)
     const rows = records.map((r: any) => ({
-      teacher_id: teacherId,
-      student_id: r.studentId,
-      class_id:   r.classId,
-      status:     r.status,
-      date:       r.date,
-      note:       r.note || null,
+      teacher_id:       teacherId,
+      student_id:       r.studentId,
+      class_id:         r.classId,
+      schedule_slot_id: r.scheduleSlotId || null,
+      status:           r.status,
+      date:             r.date,
+      reason:           r.reason || r.note || null,
+      created_at:       new Date().toISOString(),
+      updated_at:       new Date().toISOString(),
     }));
 
-    const resUpsert = await fetch(`${SUPABASE_URL}/rest/v1/attendance?on_conflict=student_id,class_id,date`, {
+    // ✅ Upsert avec la bonne URL
+    const resUpsert = await fetch(`${SUPABASE_URL}/rest/v1/attendance`, {
       method: 'POST',
       headers: H,
       body: JSON.stringify(rows)
     });
     const data = (await resUpsert.json()) as any[];
 
-    if (!resUpsert.ok) throw new AppError(`Failed to save attendance`, 500);
+    if (!resUpsert.ok) {
+      console.error('Attendance upsert error:', await resUpsert.text());
+      throw new AppError(`Failed to save attendance: ${resUpsert.status}`, 500);
+    }
 
     // Notifications aux parents pour les absences
     const absents = records.filter((r: any) => r.status === 'absent');
@@ -709,31 +732,73 @@ router.post('/messages', async (req, res, next) => {
     const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
     const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' };
+    const senderId = req.user!.id;
 
     if (!receiverId || !content) throw new AppError('receiverId et content sont requis', 400);
 
+    // 1. Cherche une conversation existante entre les deux participants
+    const resMyParts = await fetch(
+      `${SUPABASE_URL}/rest/v1/conversation_participants?profile_id=eq.${senderId}&select=conversation_id`,
+      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
+    );
+    const myParts = (await resMyParts.json()) as any[];
+    const myConvIds = myParts.map((p: any) => p.conversation_id);
+
+    let conversationId: string | null = null;
+
+    if (myConvIds.length > 0) {
+      const resOtherParts = await fetch(
+        `${SUPABASE_URL}/rest/v1/conversation_participants?profile_id=eq.${receiverId}&conversation_id=in.(${myConvIds.join(',')})&select=conversation_id`,
+        { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
+      );
+      const otherParts = (await resOtherParts.json()) as any[];
+      if (otherParts.length > 0) conversationId = otherParts[0].conversation_id;
+    }
+
+    // 2. Si pas de conversation existante, en crée une nouvelle
+    if (!conversationId) {
+      const resConv = await fetch(`${SUPABASE_URL}/rest/v1/conversations`, {
+        method: 'POST',
+        headers: H,
+        body: JSON.stringify({ created_by: senderId })
+      });
+      const convArr = (await resConv.json()) as any[];
+      conversationId = convArr[0]?.id;
+      if (!conversationId) throw new AppError('Failed to create conversation', 500);
+
+      // Ajoute les deux participants
+      await fetch(`${SUPABASE_URL}/rest/v1/conversation_participants`, {
+        method: 'POST',
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify([
+          { conversation_id: conversationId, profile_id: senderId },
+          { conversation_id: conversationId, profile_id: receiverId },
+        ])
+      });
+    }
+
+    // 3. Insère le message avec conversation_id
     const resInsert = await fetch(`${SUPABASE_URL}/rest/v1/messages`, {
       method: 'POST',
       headers: H,
       body: JSON.stringify({
-        sender_id:   req.user!.id,
-        receiver_id: receiverId,
+        conversation_id: conversationId,
+        sender_id: senderId,
         content,
-        is_read:     false,
       })
     });
     const dataArr = (await resInsert.json()) as any[];
     const data = dataArr[0];
 
-    if (!resInsert.ok) throw new AppError(`Failed to send message`, 500);
+    if (!resInsert.ok) throw new AppError('Failed to send message', 500);
 
     // Notification au destinataire
     await createNotification({
       recipientId: receiverId,
-      type:        'message',
-      title:       `Nouveau message`,
-      body:        content.substring(0, 100),
-      data:        { messageId: data.id, senderId: req.user!.id },
+      type: 'message',
+      title: 'Nouveau message',
+      body: content.substring(0, 100),
+      data: { messageId: data.id, senderId },
     });
 
     res.status(201).json(successResponse(data, 'Message envoyé'));
@@ -774,12 +839,12 @@ router.patch('/profile', async (req, res, next) => {
     const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' };
 
     const updates: Record<string, any> = {};
-    if (firstName !== undefined) updates.first_name  = firstName;
-    if (lastName  !== undefined) updates.last_name   = lastName;
-    if (phone     !== undefined) updates.phone       = phone;
-    if (address   !== undefined) updates.address     = address;
-    if (gender    !== undefined) updates.gender      = gender;
-    if (avatarUrl !== undefined) updates.avatar_url  = avatarUrl;
+    if (firstName !== undefined) updates.first_name = firstName;
+    if (lastName !== undefined) updates.last_name = lastName;
+    if (phone !== undefined) updates.phone = phone;
+    if (address !== undefined) updates.address = address;
+    if (gender !== undefined) updates.gender = gender;
+    if (avatarUrl !== undefined) updates.avatar_url = avatarUrl;
 
     if (Object.keys(updates).length === 0) {
       throw new AppError('Aucune donnée à mettre à jour', 400);
