@@ -38,14 +38,55 @@ const updateProfileSchema = z.object({
   specialization: z.string().optional(),
 });
 
+// Helper pour récupérer les données spécifiques au rôle
+async function getRoleData(profileId: string, role: string): Promise<any> {
+  if (role === 'student') {
+    const { data } = await sbGet(`students?profile_id=eq.${profileId}&select=*,classes:class_id(id,name)`);
+    const student = Array.isArray(data) ? data[0] : null;
+    if (student) {
+      const classes = Array.isArray(student.classes) ? student.classes[0] : student.classes;
+      return {
+        id: student.id,
+        student_number: student.student_number,
+        class_id: student.class_id,
+        enrollment_date: student.enrollment_date,
+        classes: classes ? { id: classes.id, name: classes.name } : null
+      };
+    }
+    return null;
+  }
+  if (role === 'teacher') {
+    const { data } = await sbGet(`teachers?profile_id=eq.${profileId}&select=*`);
+    const teacher = Array.isArray(data) ? data[0] : null;
+    return teacher ? {
+      id: teacher.id,
+      specialization: teacher.specialization,
+      employee_number: teacher.employee_number,
+      hire_date: teacher.hire_date
+    } : null;
+  }
+  if (role === 'parent') {
+    const { data } = await sbGet(`parents?profile_id=eq.${profileId}&select=*`);
+    const parent = Array.isArray(data) ? data[0] : null;
+    return parent ? {
+      id: parent.id,
+      profession: parent.profession
+    } : null;
+  }
+  return null;
+}
+
 // GET /users/me/profile
 router.get('/me/profile', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    // Table : profiles (confirmé dans la liste des tables)
     const { data } = await sbGet(`profiles?id=eq.${req.user!.id}&select=*`);
     const user = Array.isArray(data) ? data[0] : null;
     if (!user) throw new AppError('Profile not found', 404);
-    return res.json(successResponse(user));
+    
+    // Ajouter les données spécifiques au rôle
+    const roleData = await getRoleData(req.user!.id, user.role);
+    
+    return res.json(successResponse({ ...user, roleData }));
   } catch (err) { return next(err); }
 });
 
@@ -62,7 +103,11 @@ router.patch('/me/profile', async (req: Request, res: Response, next: NextFuncti
     if (body.dateOfBirth) upd.date_of_birth = body.dateOfBirth;
     const { data, ok } = await sbPatch(`profiles?id=eq.${req.user!.id}`, upd);
     if (!ok) throw new AppError('Failed to update profile', 500);
-    return res.json(successResponse(data, 'Profile updated successfully'));
+    
+    // Ajouter les données spécifiques au rôle
+    const roleData = await getRoleData(req.user!.id, data.role);
+    
+    return res.json(successResponse({ ...data, roleData }, 'Profile updated successfully'));
   } catch (err) { return next(err); }
 });
 
@@ -79,7 +124,11 @@ router.patch('/:id/profile', authorize('admin'), async (req: Request, res: Respo
     if (body.dateOfBirth) upd.date_of_birth = body.dateOfBirth;
     const { data, ok } = await sbPatch(`profiles?id=eq.${req.params.id}`, upd);
     if (!ok || !data) throw new AppError('User not found', 404);
-    return res.json(successResponse(data, 'Profile updated'));
+    
+    // Ajouter les données spécifiques au rôle
+    const roleData = await getRoleData(req.params.id, data.role);
+    
+    return res.json(successResponse({ ...data, roleData }, 'Profile updated'));
   } catch (err) { return next(err); }
 });
 
@@ -91,7 +140,11 @@ router.patch('/:id/role', authorize('admin'), async (req: Request, res: Response
     }).parse(req.body);
     const { data, ok } = await sbPatch(`profiles?id=eq.${req.params.id}`, { role });
     if (!ok || !data) throw new AppError('User not found', 404);
-    return res.json(successResponse(data, 'Role updated'));
+    
+    // Ajouter les données spécifiques au rôle
+    const roleData = await getRoleData(req.params.id, role);
+    
+    return res.json(successResponse({ ...data, roleData }, 'Role updated'));
   } catch (err) { return next(err); }
 });
 
@@ -101,7 +154,6 @@ router.get('/', authorize('admin', 'teacher'), async (req: Request, res: Respons
     const { page, limit, offset } = getPagination(req);
     const { role, search } = req.query;
 
-    // Table : profiles
     let url = `profiles?select=*&order=created_at.desc&offset=${offset}&limit=${limit}`;
 
     if (role) {
@@ -117,29 +169,10 @@ router.get('/', authorize('admin', 'teacher'), async (req: Request, res: Respons
     const { data } = await sbGet(url);
     const arr = Array.isArray(data) ? data : [];
 
-    // Enrichir chaque user avec son class_id si student
+    // Enrichir chaque user avec ses données spécifiques au rôle
     const enriched = await Promise.all(arr.map(async (user: any) => {
-      if (user.role === 'student') {
-        const { data: st } = await sbGet(`students?profile_id=eq.${user.id}&select=id,class_id`);
-        const student = Array.isArray(st) ? st[0] : null;
-        if (student?.class_id) {
-          const { data: cls } = await sbGet(`classes?id=eq.${student.class_id}&select=name`);
-          const className = Array.isArray(cls) ? cls[0]?.name : null;
-          return { ...user, roleId: student.id, roleData: { classes: { name: className } } };
-        }
-        return { ...user, roleId: student?.id || null };
-      }
-      if (user.role === 'teacher') {
-        const { data: te } = await sbGet(`teachers?profile_id=eq.${user.id}&select=id`);
-        const teacher = Array.isArray(te) ? te[0] : null;
-        return { ...user, roleId: teacher?.id || null };
-      }
-      if (user.role === 'parent') {
-        const { data: pa } = await sbGet(`parents?profile_id=eq.${user.id}&select=id`);
-        const parent = Array.isArray(pa) ? pa[0] : null;
-        return { ...user, roleId: parent?.id || null };
-      }
-      return user;
+      const roleData = await getRoleData(user.id, user.role);
+      return { ...user, roleData };
     }));
 
     return res.json(paginate(enriched, enriched.length, { page, limit, offset }));
@@ -153,7 +186,11 @@ router.get('/:id', authorize('admin', 'teacher'), async (req: Request, res: Resp
     const user = Array.isArray(data) ? data[0] : null;
     if (!user) throw new AppError('User not found', 404);
     if (req.user!.role === 'teacher' && user.role !== 'student') throw new AppError('Forbidden', 403);
-    return res.json(successResponse(user));
+    
+    // ✅ CORRIGÉ: Ajouter les données spécifiques au rôle (ID dans tables students/parents/teachers)
+    const roleData = await getRoleData(req.params.id, user.role);
+    
+    return res.json(successResponse({ ...user, roleData }));
   } catch (err) { return next(err); }
 });
 
@@ -163,7 +200,11 @@ router.patch('/:id/status', authorize('admin'), async (req: Request, res: Respon
     const { isActive } = z.object({ isActive: z.boolean() }).parse(req.body);
     const { data, ok } = await sbPatch(`profiles?id=eq.${req.params.id}`, { is_active: isActive });
     if (!ok || !data) throw new AppError('User not found', 404);
-    return res.json(successResponse(data, `User ${isActive ? 'activated' : 'deactivated'}`));
+    
+    // Ajouter les données spécifiques au rôle
+    const roleData = await getRoleData(req.params.id, data.role);
+    
+    return res.json(successResponse({ ...data, roleData }, `User ${isActive ? 'activated' : 'deactivated'}`));
   } catch (err) { return next(err); }
 });
 
