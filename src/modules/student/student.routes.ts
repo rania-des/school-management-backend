@@ -114,11 +114,12 @@ router.get('/my-assignments', async (req, res, next) => {
       `submissions?student_id=eq.${student.id}&select=*`
     );
 
-    // Récupérer TOUS les commentaires associés aux soumissions de l'étudiant
+    // Récupérer les commentaires associés aux soumissions
     const submissionIds = (submissions || []).map((s: any) => s.id).join(',');
     let commentsMap = new Map();
     
     if (submissionIds) {
+      // Récupérer les commentaires qui ont submission_id
       const { data: comments } = await sbGet(
         `teacher_comments?submission_id=in.(${submissionIds})&select=*&order=created_at.desc`
       );
@@ -136,26 +137,19 @@ router.get('/my-assignments', async (req, res, next) => {
     const submissionsWithComments = (submissions || []).map((sub: any) => {
       const subComments = commentsMap.get(sub.id) || [];
       
-      // Extraire le commentaire du professeur (type: teacher_feedback)
-      const teacherCommentObj = subComments.find((c: any) => c.comment_type === 'teacher_feedback');
-      // Extraire la réponse de l'étudiant (type: student_reply)
+      // Trouver le commentaire du professeur (comment_type = 'teacher_feedback' ou par défaut le premier)
+      const teacherCommentObj = subComments.find((c: any) => c.comment_type === 'teacher_feedback') || subComments[0];
+      // Trouver la réponse de l'étudiant
       const studentReplyObj = subComments.find((c: any) => c.comment_type === 'student_reply');
       
       return {
         ...sub,
-        teacher_comment: teacherCommentObj?.content || null,
+        teacher_comment: teacherCommentObj?.comment || null,
         comment_added_at: teacherCommentObj?.created_at || null,
-        student_reply: studentReplyObj?.content || null,
+        student_reply: studentReplyObj?.comment || null,
         student_reply_at: studentReplyObj?.created_at || null,
-        all_comments: subComments, // Pour debug
       };
     });
-
-    console.log(`📊 Soumissions avec commentaires:`, submissionsWithComments.map((s: any) => ({
-      id: s.id,
-      hasTeacherComment: !!s.teacher_comment,
-      hasStudentReply: !!s.student_reply,
-    })));
 
     res.json(successResponse({
       studentId: student.id,
@@ -204,7 +198,9 @@ router.post('/my-assignments/:assignmentId/submit', async (req, res, next) => {
         if (uploadError) {
           console.error('Upload error:', uploadError.message);
         } else {
-          const { data: urlData } = supabaseAdmin.storage.from('submissions').getPublicUrl(filePath);
+          const { data: urlData } = supabaseAdmin.storage
+            .from('submissions')
+            .getPublicUrl(filePath);
           fileUrl = urlData.publicUrl;
         }
       } catch (uploadErr) {
@@ -212,7 +208,9 @@ router.post('/my-assignments/:assignmentId/submit', async (req, res, next) => {
       }
     }
 
-    const { data: existing } = await sbGet(`submissions?student_id=eq.${student.id}&assignment_id=eq.${assignmentId}&select=id`);
+    const { data: existing } = await sbGet(
+      `submissions?student_id=eq.${student.id}&assignment_id=eq.${assignmentId}&select=id`
+    );
     const existingArr = Array.isArray(existing) ? existing : [];
 
     const submissionBody: any = {
@@ -266,7 +264,7 @@ router.patch('/my-assignments/:assignmentId/reply', async (req, res, next) => {
     if (existingReplies && Array.isArray(existingReplies) && existingReplies.length > 0) {
       // Mettre à jour la réponse existante
       const updated = await sbPatch(`teacher_comments?id=eq.${existingReplies[0].id}`, {
-        content: student_reply.trim(),
+        comment: student_reply.trim(),
         updated_at: new Date().toISOString(),
       });
       return res.json(successResponse(updated.data, 'Réponse mise à jour'));
@@ -278,7 +276,7 @@ router.patch('/my-assignments/:assignmentId/reply', async (req, res, next) => {
         body: JSON.stringify({
           submission_id: submission.id,
           student_id: student.id,
-          content: student_reply.trim(),
+          comment: student_reply.trim(),
           comment_type: 'student_reply',
           created_at: new Date().toISOString(),
         })
