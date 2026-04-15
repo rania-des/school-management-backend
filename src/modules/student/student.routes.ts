@@ -28,6 +28,24 @@ async function sbPatch(path: string, body: any) {
   return { data: Array.isArray(data) ? data[0] : data, ok: res.ok };
 }
 
+// ─── Helper pour uploader un fichier dans Supabase Storage ───────────────────
+async function uploadToStorage(buffer: Buffer, fileName: string, mimeType: string, studentId: string): Promise<string> {
+  const storageUrl = `${SUPABASE_URL}/storage/v1/object/submissions/${studentId}/${Date.now()}_${fileName}`;
+  const uploadRes = await fetch(storageUrl, {
+    method: 'POST',
+    headers: {
+      'apikey': SUPABASE_KEY,
+      'Authorization': `Bearer ${SUPABASE_KEY}`,
+      'Content-Type': mimeType,
+    },
+    body: buffer,
+  });
+  if (!uploadRes.ok) {
+    throw new Error(`Upload failed: ${uploadRes.status}`);
+  }
+  return storageUrl;
+}
+
 // ─── GET /student/my-profile ──────────────────────────────────────────────────
 router.get('/my-profile', async (req, res, next) => {
   try {
@@ -42,7 +60,6 @@ router.get('/my-profile', async (req, res, next) => {
 });
 
 // ─── GET /student/my-class-info ───────────────────────────────────────────────
-// Retourne class_id + class_name de l'étudiant connecté
 router.get('/my-class-info', async (req, res, next) => {
   try {
     const { data } = await sbGet(`students?profile_id=eq.${req.user!.id}&select=id,class_id,classes(id,name)`);
@@ -57,7 +74,6 @@ router.get('/my-class-info', async (req, res, next) => {
 });
 
 // ─── GET /student/my-schedule ─────────────────────────────────────────────────
-// Retourne l'emploi du temps de la classe de l'étudiant connecté
 router.get('/my-schedule', async (req, res, next) => {
   try {
     const { data: students } = await sbGet(`students?profile_id=eq.${req.user!.id}&select=class_id`);
@@ -118,27 +134,59 @@ router.get('/my-assignments', async (req, res, next) => {
 });
 
 // ─── POST /student/my-assignments/:assignmentId/submit ────────────────────────
+// ✅ BUG 1 CORRIGÉ: Upload fichier vers Storage
 router.post('/my-assignments/:assignmentId/submit', async (req, res, next) => {
   try {
     const { assignmentId } = req.params;
+    const { file_data, file_name } = req.body;
+
     const { data: students } = await sbGet(`students?profile_id=eq.${req.user!.id}&select=id`);
     const student = Array.isArray(students) ? students[0] : null;
     if (!student) throw new AppError('Student not found', 404);
 
-    // Utilise le endpoint existant assignments/:id/submissions
-    const { data: existing } = await sbGet(`submissions?student_id=eq.${student.id}&assignment_id=eq.${assignmentId}&select=id`);
+    // Vérifier si le devoir existe et s'il est en retard
+    const { data: assignmentArr } = await sbGet(`assignments?id=eq.${assignmentId}&select=due_date`);
+    const assignment = Array.isArray(assignmentArr) ? assignmentArr[0] : null;
+    const isLate = assignment?.due_date && new Date() > new Date(assignment.due_date);
+
+    // Uploader le fichier base64 dans Supabase Storage
+    let fileUrl: string | undefined;
+    if (file_data && file_name) {
+      try {
+        // Décoder base64
+        const base64Data = file_data.includes(',') ? file_data.split(',')[1] : file_data;
+        const mimeType = file_data.includes(',') ? file_data.split(';')[0].replace('data:', '') : 'application/octet-stream';
+        const buffer = Buffer.from(base64Data, 'base64');
+        
+        // Upload vers Storage
+        fileUrl = await uploadToStorage(buffer, file_name, mimeType, student.id);
+      } catch (uploadErr) {
+        console.error('Upload error:', uploadErr);
+        // Fallback: garder le base64
+        fileUrl = file_data;
+      }
+    }
+
+    // Vérifier si une soumission existe déjà
+    const { data: existing } = await sbGet(
+      `submissions?student_id=eq.${student.id}&assignment_id=eq.${assignmentId}&select=id`
+    );
     const existingArr = Array.isArray(existing) ? existing : [];
 
     if (existingArr.length > 0) {
-      // PATCH existing submission
-      const updated = await sbPatch(`submissions?id=eq.${existingArr[0].id}`, {
-        ...req.body,
+      // Mettre à jour la soumission existante
+      const updatePayload: any = {
         submitted_at: new Date().toISOString(),
-        status: 'submitted',
-      });
+        status: isLate ? 'late' : 'submitted',
+      };
+      if (fileUrl) {
+        updatePayload.file_url = fileUrl;
+        updatePayload.file_name = file_name;
+      }
+      const updated = await sbPatch(`submissions?id=eq.${existingArr[0].id}`, updatePayload);
       return res.json(successResponse(updated.data, 'Submission updated'));
     } else {
-      // POST new submission
+      // Créer une nouvelle soumission
       const subRes = await fetch(`${SUPABASE_URL}/rest/v1/submissions`, {
         method: 'POST',
         headers: { ...H, 'Prefer': 'return=representation' },
@@ -146,13 +194,43 @@ router.post('/my-assignments/:assignmentId/submit', async (req, res, next) => {
           assignment_id: assignmentId,
           student_id: student.id,
           submitted_at: new Date().toISOString(),
-          status: 'submitted',
-          ...req.body,
+          status: isLate ? 'late' : 'submitted',
+          file_url: fileUrl,
+          file_name: file_name,
         }),
       });
       const data = await subRes.json();
       return res.status(201).json(successResponse(Array.isArray(data) ? data[0] : data, 'Submission created'));
     }
+  } catch (err) { next(err); }
+});
+
+// ─── PATCH /student/my-submissions/:submissionId/reply ────────────────────────
+// ✅ BUG 3B CORRIGÉ: Route pour répondre au professeur
+router.patch('/my-submissions/:submissionId/reply', async (req, res, next) => {
+  try {
+    const { submissionId } = req.params;
+    const { student_reply, student_reply_at } = req.body;
+
+    // Vérifier que cette soumission appartient bien à cet étudiant
+    const { data: students } = await sbGet(`students?profile_id=eq.${req.user!.id}&select=id`);
+    const student = Array.isArray(students) ? students[0] : null;
+    if (!student) throw new AppError('Student not found', 404);
+
+    const { data: subArr } = await sbGet(
+      `submissions?id=eq.${submissionId}&student_id=eq.${student.id}&select=id`
+    );
+    if (!Array.isArray(subArr) || subArr.length === 0) {
+      throw new AppError('Submission not found or access denied', 404);
+    }
+
+    const { data, ok } = await sbPatch(`submissions?id=eq.${submissionId}`, {
+      student_reply,
+      student_reply_at: student_reply_at || new Date().toISOString(),
+    });
+
+    if (!ok) throw new AppError('Failed to send reply', 500);
+    res.json(successResponse(data, 'Reply sent'));
   } catch (err) { next(err); }
 });
 
@@ -200,7 +278,6 @@ router.patch('/my-notifications/:id/read', async (req, res, next) => {
 });
 
 // ─── GET /student/my-courses ──────────────────────────────────────────────────
-// Cours (assignments de type 'course') + matières de la classe
 router.get('/my-courses', async (req, res, next) => {
   try {
     const { data: students } = await sbGet(`students?profile_id=eq.${req.user!.id}&select=class_id`);
@@ -221,7 +298,6 @@ router.get('/my-courses', async (req, res, next) => {
 });
 
 // ─── GET /student/my-teachers ─────────────────────────────────────────────────
-// Professeurs de la classe de l'étudiant via schedule_slots
 router.get('/my-teachers', async (req, res, next) => {
   try {
     const { data: students } = await sbGet(`students?profile_id=eq.${req.user!.id}&select=class_id`);

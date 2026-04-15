@@ -27,6 +27,7 @@ import meetingsRoutes     from './modules/meetings/meetings.routes';
 import usersRoutes        from './modules/users/users.routes';
 import analyticsRoutes    from './modules/analytics/analytics.routes';
 import dbRoutes           from './routes/db.routes';
+import downloadRoutes     from './modules/student/download.routes';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -97,6 +98,9 @@ app.use(`${API}/meetings`,      meetingsRoutes);
 app.use(`${API}/users`,         usersRoutes);
 app.use(`${API}/analytics`,     analyticsRoutes);
 app.use(`${API}/db`,            dbRoutes);
+
+// ✅ Route de téléchargement sécurisé pour les fichiers des étudiants
+app.use(`${API}/student`, downloadRoutes);
 
 app.get(`${API}/ping`, (_req, res) => {
   res.json({ message: 'pong', timestamp: new Date().toISOString() });
