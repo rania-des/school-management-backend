@@ -116,11 +116,11 @@ router.get('/my-assignments', async (req, res, next) => {
 });
 
 // ─── POST /student/my-assignments/:assignmentId/submit ────────────────────────
-// ✅ CORRIGÉ: Utilise supabaseAdmin directement pour l'upload
+// ✅ CORRIGÉ BUG 1: Mapping file_data → file_url dans la soumission
 router.post('/my-assignments/:assignmentId/submit', async (req, res, next) => {
   try {
     const { assignmentId } = req.params;
-    const { file_data, file_name } = req.body;
+    const { file_data, file_name, ...rest } = req.body;
 
     const { data: students } = await sbGet(`students?profile_id=eq.${req.user!.id}&select=id`);
     const student = Array.isArray(students) ? students[0] : null;
@@ -171,13 +171,12 @@ router.post('/my-assignments/:assignmentId/submit', async (req, res, next) => {
 
     if (existingArr.length > 0) {
       const updatePayload: any = {
+        ...rest,
         submitted_at: new Date().toISOString(),
         status: isLate ? 'late' : 'submitted',
+        file_url: fileUrl || null,
+        file_name: file_name || null,
       };
-      if (fileUrl) {
-        updatePayload.file_url = fileUrl;
-        updatePayload.file_name = file_name;
-      }
       const updated = await sbPatch(`submissions?id=eq.${existingArr[0].id}`, updatePayload);
       return res.json(successResponse(updated.data, 'Submission updated'));
     } else {
@@ -189,8 +188,9 @@ router.post('/my-assignments/:assignmentId/submit', async (req, res, next) => {
           student_id: student.id,
           submitted_at: new Date().toISOString(),
           status: isLate ? 'late' : 'submitted',
-          file_url: fileUrl,
-          file_name: file_name,
+          file_url: fileUrl || null,
+          file_name: file_name || null,
+          ...rest,
         }),
       });
       const data = await subRes.json();
