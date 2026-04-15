@@ -105,40 +105,45 @@ router.get('/my-assignments', async (req, res, next) => {
     if (!student) throw new AppError('Student not found', 404);
 
     // Récupérer les devoirs de la classe
-    const { data: assignments } = await sbGet(
+    const { data: assignmentsRaw } = await sbGet(
       `assignments?class_id=eq.${student.class_id}&select=*,subjects(id,name),classes(id,name)&order=created_at.desc`
     );
+    const assignments = Array.isArray(assignmentsRaw) ? assignmentsRaw : [];
 
     // Récupérer les soumissions de l'étudiant
-    const { data: submissions } = await sbGet(
+    const { data: submissionsRaw } = await sbGet(
       `submissions?student_id=eq.${student.id}&select=*`
     );
+    const submissions = Array.isArray(submissionsRaw) ? submissionsRaw : [];
 
     // Récupérer les commentaires associés aux soumissions
-    const submissionIds = (submissions || []).map((s: any) => s.id).join(',');
     let commentsMap = new Map();
     
-    if (submissionIds) {
-      // Récupérer les commentaires qui ont submission_id
-      const { data: comments } = await sbGet(
-        `teacher_comments?submission_id=in.(${submissionIds})&select=*&order=created_at.desc`
-      );
+    if (submissions.length > 0) {
+      const submissionIds = submissions.map((s: any) => s.id).join(',');
       
-      // Grouper les commentaires par submission_id
-      for (const comment of (comments || [])) {
-        if (!commentsMap.has(comment.submission_id)) {
-          commentsMap.set(comment.submission_id, []);
+      if (submissionIds) {
+        const { data: commentsRaw } = await sbGet(
+          `teacher_comments?submission_id=in.(${submissionIds})&select=*&order=created_at.desc`
+        );
+        const comments = Array.isArray(commentsRaw) ? commentsRaw : [];
+        
+        // Grouper les commentaires par submission_id
+        for (const comment of comments) {
+          if (!commentsMap.has(comment.submission_id)) {
+            commentsMap.set(comment.submission_id, []);
+          }
+          commentsMap.get(comment.submission_id).push(comment);
         }
-        commentsMap.get(comment.submission_id).push(comment);
       }
     }
 
     // Fusionner les soumissions avec leurs commentaires
-    const submissionsWithComments = (submissions || []).map((sub: any) => {
+    const submissionsWithComments = submissions.map((sub: any) => {
       const subComments = commentsMap.get(sub.id) || [];
       
-      // Trouver le commentaire du professeur (comment_type = 'teacher_feedback' ou par défaut le premier)
-      const teacherCommentObj = subComments.find((c: any) => c.comment_type === 'teacher_feedback') || subComments[0];
+      // Trouver le commentaire du professeur (comment_type = 'teacher_feedback')
+      const teacherCommentObj = subComments.find((c: any) => c.comment_type === 'teacher_feedback');
       // Trouver la réponse de l'étudiant
       const studentReplyObj = subComments.find((c: any) => c.comment_type === 'student_reply');
       
@@ -154,7 +159,7 @@ router.get('/my-assignments', async (req, res, next) => {
     res.json(successResponse({
       studentId: student.id,
       classId: student.class_id,
-      assignments: Array.isArray(assignments) ? assignments : [],
+      assignments: assignments,
       submissions: submissionsWithComments,
     }));
   } catch (err) { 
@@ -257,11 +262,12 @@ router.patch('/my-assignments/:assignmentId/reply', async (req, res, next) => {
     if (!submission) throw new AppError('Submission not found', 404);
 
     // Vérifier si une réponse existe déjà
-    const { data: existingReplies } = await sbGet(
+    const { data: existingRepliesRaw } = await sbGet(
       `teacher_comments?submission_id=eq.${submission.id}&student_id=eq.${student.id}&comment_type=eq.student_reply&select=id`
     );
+    const existingReplies = Array.isArray(existingRepliesRaw) ? existingRepliesRaw : [];
     
-    if (existingReplies && Array.isArray(existingReplies) && existingReplies.length > 0) {
+    if (existingReplies.length > 0) {
       // Mettre à jour la réponse existante
       const updated = await sbPatch(`teacher_comments?id=eq.${existingReplies[0].id}`, {
         comment: student_reply.trim(),
@@ -295,8 +301,8 @@ router.get('/my-announcements', async (req, res, next) => {
     const student = Array.isArray(students) ? students[0] : null;
     const classId = student?.class_id;
 
-    const { data } = await sbGet(`announcements?select=*&order=created_at.desc`);
-    const all = Array.isArray(data) ? data : [];
+    const { data: rawData } = await sbGet(`announcements?select=*&order=created_at.desc`);
+    const all = Array.isArray(rawData) ? rawData : [];
     const filtered = all.filter((a: any) => !a.class_id || a.class_id === classId);
     res.json(successResponse(filtered));
   } catch (err) { next(err); }
@@ -310,8 +316,8 @@ router.get('/my-notifications', async (req, res, next) => {
     const student = Array.isArray(students) ? students[0] : null;
     const classId = student?.class_id;
 
-    const { data } = await sbGet(`notifications?select=*&order=created_at.desc`);
-    const all = Array.isArray(data) ? data : [];
+    const { data: rawData } = await sbGet(`notifications?select=*&order=created_at.desc`);
+    const all = Array.isArray(rawData) ? rawData : [];
     const filtered = all.filter((n: any) => {
       if (n.class_id) return n.class_id === classId;
       if (n.user_id) return n.user_id === userId;
@@ -342,10 +348,13 @@ router.get('/my-courses', async (req, res, next) => {
       sbGet(`assignments?class_id=eq.${student.class_id}&type=eq.course&select=*,subjects(id,name)&order=created_at.desc`),
     ]);
 
+    const slotsData = Array.isArray(slotsRes.data) ? slotsRes.data : [];
+    const coursesData = Array.isArray(coursesRes.data) ? coursesRes.data : [];
+
     res.json(successResponse({
       classId: student.class_id,
-      scheduleSubjects: Array.isArray(slotsRes.data) ? slotsRes.data : [],
-      courses: Array.isArray(coursesRes.data) ? coursesRes.data : [],
+      scheduleSubjects: slotsData,
+      courses: coursesData,
     }));
   } catch (err) { next(err); }
 });
@@ -357,10 +366,10 @@ router.get('/my-teachers', async (req, res, next) => {
     const student = Array.isArray(students) ? students[0] : null;
     if (!student?.class_id) throw new AppError('No class assigned', 404);
 
-    const { data: slots } = await sbGet(
+    const { data: slotsRaw } = await sbGet(
       `schedule_slots?class_id=eq.${student.class_id}&is_active=eq.true&select=teacher_id,subject_id,subjects(id,name),teachers(id,profile_id,profiles(first_name,last_name))`
     );
-    const slotsArr = Array.isArray(slots) ? slots : [];
+    const slotsArr = Array.isArray(slotsRaw) ? slotsRaw : [];
 
     const teacherMap = new Map<string, any>();
     for (const slot of slotsArr) {
