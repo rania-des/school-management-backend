@@ -97,18 +97,33 @@ router.get('/my-grades', async (req, res, next) => {
 });
 
 // ─── GET /student/my-assignments ──────────────────────────────────────────────
-// ✅ CORRIGÉ: Récupération des commentaires depuis teacher_comments
+// ✅ CORRIGÉ: Récupération des devoirs (avec fallback si class_id est null)
 router.get('/my-assignments', async (req, res, next) => {
   try {
     const { data: students } = await sbGet(`students?profile_id=eq.${req.user!.id}&select=id,class_id`);
     const student = Array.isArray(students) ? students[0] : null;
     if (!student) throw new AppError('Student not found', 404);
 
-    // Récupérer les devoirs de la classe
-    const { data: assignmentsRaw } = await sbGet(
-      `assignments?class_id=eq.${student.class_id}&select=*,subjects(id,name),classes(id,name)&order=created_at.desc`
-    );
-    const assignments = Array.isArray(assignmentsRaw) ? assignmentsRaw : [];
+    // Récupérer les devoirs de la classe de l'étudiant
+    // Si class_id est null, on essaie de récupérer via la table teacher_assignments
+    let assignments: any[] = [];
+    
+    if (student.class_id) {
+      const { data: assignmentsRaw } = await sbGet(
+        `assignments?class_id=eq.${student.class_id}&select=*,subjects(id,name),classes(id,name)&order=created_at.desc`
+      );
+      assignments = Array.isArray(assignmentsRaw) ? assignmentsRaw : [];
+    }
+    
+    // Fallback: récupérer les devoirs via teacher_assignments si aucun devoir trouvé
+    if (assignments.length === 0) {
+      const { data: teacherAssignmentsRaw } = await sbGet(
+        `teacher_assignments?class_id=eq.${student.class_id}&select=*,subjects(id,name),classes(id,name)`
+      );
+      if (Array.isArray(teacherAssignmentsRaw) && teacherAssignmentsRaw.length > 0) {
+        assignments = teacherAssignmentsRaw;
+      }
+    }
 
     // Récupérer les soumissions de l'étudiant
     const { data: submissionsRaw } = await sbGet(
@@ -128,7 +143,6 @@ router.get('/my-assignments', async (req, res, next) => {
         );
         const comments = Array.isArray(commentsRaw) ? commentsRaw : [];
         
-        // Grouper les commentaires par submission_id
         for (const comment of comments) {
           if (!commentsMap.has(comment.submission_id)) {
             commentsMap.set(comment.submission_id, []);
@@ -141,10 +155,7 @@ router.get('/my-assignments', async (req, res, next) => {
     // Fusionner les soumissions avec leurs commentaires
     const submissionsWithComments = submissions.map((sub: any) => {
       const subComments = commentsMap.get(sub.id) || [];
-      
-      // Trouver le commentaire du professeur (comment_type = 'teacher_feedback')
       const teacherCommentObj = subComments.find((c: any) => c.comment_type === 'teacher_feedback');
-      // Trouver la réponse de l'étudiant
       const studentReplyObj = subComments.find((c: any) => c.comment_type === 'student_reply');
       
       return {
@@ -155,6 +166,9 @@ router.get('/my-assignments', async (req, res, next) => {
         student_reply_at: studentReplyObj?.created_at || null,
       };
     });
+
+    console.log(`📊 Assignments trouvés: ${assignments.length}`);
+    console.log(`📊 Submissions trouvées: ${submissions.length}`);
 
     res.json(successResponse({
       studentId: student.id,
@@ -246,7 +260,6 @@ router.post('/my-assignments/:assignmentId/submit', async (req, res, next) => {
 });
 
 // ─── PATCH /student/my-assignments/:assignmentId/reply ────────────────────────
-// ✅ CORRIGÉ: Utilisation de teacher_comments pour la réponse
 router.patch('/my-assignments/:assignmentId/reply', async (req, res, next) => {
   try {
     const { assignmentId } = req.params;
@@ -261,21 +274,18 @@ router.patch('/my-assignments/:assignmentId/reply', async (req, res, next) => {
     const submission = Array.isArray(submissions) ? submissions[0] : null;
     if (!submission) throw new AppError('Submission not found', 404);
 
-    // Vérifier si une réponse existe déjà
     const { data: existingRepliesRaw } = await sbGet(
       `teacher_comments?submission_id=eq.${submission.id}&student_id=eq.${student.id}&comment_type=eq.student_reply&select=id`
     );
     const existingReplies = Array.isArray(existingRepliesRaw) ? existingRepliesRaw : [];
     
     if (existingReplies.length > 0) {
-      // Mettre à jour la réponse existante
       const updated = await sbPatch(`teacher_comments?id=eq.${existingReplies[0].id}`, {
         comment: student_reply.trim(),
         updated_at: new Date().toISOString(),
       });
       return res.json(successResponse(updated.data, 'Réponse mise à jour'));
     } else {
-      // Créer une nouvelle réponse
       const resInsert = await fetch(`${SUPABASE_URL}/rest/v1/teacher_comments`, {
         method: 'POST',
         headers: { ...H, 'Prefer': 'return=representation' },
