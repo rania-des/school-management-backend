@@ -18,6 +18,7 @@ async function sbGet(path: string) {
   if (!res.ok) console.error(`❌ sbGet ${path.split('?')[0]} →`, res.status, JSON.stringify(data).slice(0, 200));
   return { data, ok: res.ok };
 }
+
 async function sbPatch(path: string, body: any) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
     method: 'PATCH',
@@ -102,21 +103,34 @@ router.get('/my-assignments', async (req, res, next) => {
     const student = Array.isArray(students) ? students[0] : null;
     if (!student) throw new AppError('Student not found', 404);
 
-    const [assignmentsRes, submissionsRes] = await Promise.all([
+    const [assignmentsRes, submissionsRes, teacherCommentsRes] = await Promise.all([
       sbGet(`assignments?class_id=eq.${student.class_id}&select=*,subjects(id,name),classes(id,name)&order=created_at.desc`),
       sbGet(`submissions?student_id=eq.${student.id}&select=*`),
+      sbGet(`teacher_comments?student_id=eq.${student.id}&select=*,teachers(profile_id,profiles(first_name,last_name))&order=created_at.desc`),
     ]);
+
+    // Associer les commentaires aux submissions
+    const submissions = Array.isArray(submissionsRes.data) ? submissionsRes.data : [];
+    const comments = Array.isArray(teacherCommentsRes.data) ? teacherCommentsRes.data : [];
+    
+    const submissionsWithComments = submissions.map(sub => ({
+      ...sub,
+      teacher_comment: comments.find(c => c.submission_id === sub.id && c.comment_type === 'teacher_feedback')?.content || null,
+      comment_added_at: comments.find(c => c.submission_id === sub.id && c.comment_type === 'teacher_feedback')?.created_at || null,
+      student_reply: comments.find(c => c.submission_id === sub.id && c.comment_type === 'student_reply')?.content || null,
+      student_reply_at: comments.find(c => c.submission_id === sub.id && c.comment_type === 'student_reply')?.created_at || null,
+    }));
 
     res.json(successResponse({
       studentId: student.id,
+      classId: student.class_id,
       assignments: Array.isArray(assignmentsRes.data) ? assignmentsRes.data : [],
-      submissions: Array.isArray(submissionsRes.data) ? submissionsRes.data : [],
+      submissions: submissionsWithComments,
     }));
   } catch (err) { next(err); }
 });
 
 // ─── POST /student/my-assignments/:assignmentId/submit ────────────────────────
-// ✅ CORRIGÉ BUG 1: Mapping file_data → file_url dans la soumission
 router.post('/my-assignments/:assignmentId/submit', async (req, res, next) => {
   try {
     const { assignmentId } = req.params;
@@ -126,12 +140,10 @@ router.post('/my-assignments/:assignmentId/submit', async (req, res, next) => {
     const student = Array.isArray(students) ? students[0] : null;
     if (!student) throw new AppError('Student not found', 404);
 
-    // Vérifier si le devoir est en retard
     const { data: assignmentArr } = await sbGet(`assignments?id=eq.${assignmentId}&select=due_date`);
     const assignment = Array.isArray(assignmentArr) ? assignmentArr[0] : null;
     const isLate = assignment?.due_date && new Date() > new Date(assignment.due_date);
 
-    // Uploader le fichier base64 dans Supabase Storage via supabaseAdmin
     let fileUrl: string | undefined;
     if (file_data && file_name) {
       try {
@@ -153,9 +165,7 @@ router.post('/my-assignments/:assignmentId/submit', async (req, res, next) => {
         if (uploadError) {
           console.error('Upload error:', uploadError.message);
         } else {
-          const { data: urlData } = supabaseAdmin.storage
-            .from('submissions')
-            .getPublicUrl(filePath);
+          const { data: urlData } = supabaseAdmin.storage.from('submissions').getPublicUrl(filePath);
           fileUrl = urlData.publicUrl;
         }
       } catch (uploadErr) {
@@ -163,21 +173,19 @@ router.post('/my-assignments/:assignmentId/submit', async (req, res, next) => {
       }
     }
 
-    // Vérifier si une soumission existe déjà
-    const { data: existing } = await sbGet(
-      `submissions?student_id=eq.${student.id}&assignment_id=eq.${assignmentId}&select=id`
-    );
+    const { data: existing } = await sbGet(`submissions?student_id=eq.${student.id}&assignment_id=eq.${assignmentId}&select=id`);
     const existingArr = Array.isArray(existing) ? existing : [];
 
+    const submissionBody: any = {
+      ...rest,
+      submitted_at: new Date().toISOString(),
+      status: isLate ? 'late' : 'submitted',
+    };
+    if (fileUrl) submissionBody.file_url = fileUrl;
+    if (file_name) submissionBody.file_name = file_name;
+
     if (existingArr.length > 0) {
-      const updatePayload: any = {
-        ...rest,
-        submitted_at: new Date().toISOString(),
-        status: isLate ? 'late' : 'submitted',
-        file_url: fileUrl || null,
-        file_name: file_name || null,
-      };
-      const updated = await sbPatch(`submissions?id=eq.${existingArr[0].id}`, updatePayload);
+      const updated = await sbPatch(`submissions?id=eq.${existingArr[0].id}`, submissionBody);
       return res.json(successResponse(updated.data, 'Submission updated'));
     } else {
       const subRes = await fetch(`${SUPABASE_URL}/rest/v1/submissions`, {
@@ -186,11 +194,7 @@ router.post('/my-assignments/:assignmentId/submit', async (req, res, next) => {
         body: JSON.stringify({
           assignment_id: assignmentId,
           student_id: student.id,
-          submitted_at: new Date().toISOString(),
-          status: isLate ? 'late' : 'submitted',
-          file_url: fileUrl || null,
-          file_name: file_name || null,
-          ...rest,
+          ...submissionBody,
         }),
       });
       const data = await subRes.json();
@@ -199,31 +203,48 @@ router.post('/my-assignments/:assignmentId/submit', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ─── PATCH /student/my-submissions/:submissionId/reply ────────────────────────
-router.patch('/my-submissions/:submissionId/reply', async (req, res, next) => {
+// ─── PATCH /student/my-assignments/:assignmentId/reply ────────────────────────
+router.patch('/my-assignments/:assignmentId/reply', async (req, res, next) => {
   try {
-    const { submissionId } = req.params;
-    const { student_reply, student_reply_at } = req.body;
+    const { assignmentId } = req.params;
+    const { student_reply } = req.body;
+    if (!student_reply?.trim()) throw new AppError('student_reply est requis', 400);
 
-    // Vérifier que cette soumission appartient bien à cet étudiant
     const { data: students } = await sbGet(`students?profile_id=eq.${req.user!.id}&select=id`);
     const student = Array.isArray(students) ? students[0] : null;
     if (!student) throw new AppError('Student not found', 404);
 
-    const { data: subArr } = await sbGet(
-      `submissions?id=eq.${submissionId}&student_id=eq.${student.id}&select=id`
-    );
-    if (!Array.isArray(subArr) || subArr.length === 0) {
-      throw new AppError('Submission not found or access denied', 404);
+    const { data: submissions } = await sbGet(`submissions?student_id=eq.${student.id}&assignment_id=eq.${assignmentId}&select=id`);
+    const submission = Array.isArray(submissions) ? submissions[0] : null;
+    if (!submission) throw new AppError('Submission not found', 404);
+
+    // Vérifier si une réponse existe déjà
+    const { data: existingReplies } = await sbGet(`teacher_comments?submission_id=eq.${submission.id}&student_id=eq.${student.id}&comment_type=eq.student_reply&select=id`);
+    
+    if (existingReplies && Array.isArray(existingReplies) && existingReplies.length > 0) {
+      // Mettre à jour la réponse existante
+      const updated = await sbPatch(`teacher_comments?id=eq.${existingReplies[0].id}`, {
+        content: student_reply.trim(),
+        updated_at: new Date().toISOString(),
+      });
+      return res.json(successResponse(updated.data, 'Réponse mise à jour'));
+    } else {
+      // Créer une nouvelle réponse
+      const resInsert = await fetch(`${SUPABASE_URL}/rest/v1/teacher_comments`, {
+        method: 'POST',
+        headers: { ...H, 'Prefer': 'return=representation' },
+        body: JSON.stringify({
+          submission_id: submission.id,
+          student_id: student.id,
+          content: student_reply.trim(),
+          comment_type: 'student_reply',
+          created_at: new Date().toISOString(),
+        })
+      });
+      const data = await resInsert.json();
+      if (!resInsert.ok) throw new AppError('Failed to send reply', 500);
+      return res.status(201).json(successResponse(Array.isArray(data) ? data[0] : data, 'Réponse envoyée'));
     }
-
-    const { data, ok } = await sbPatch(`submissions?id=eq.${submissionId}`, {
-      student_reply,
-      student_reply_at: student_reply_at || new Date().toISOString(),
-    });
-
-    if (!ok) throw new AppError('Failed to send reply', 500);
-    res.json(successResponse(data, 'Reply sent'));
   } catch (err) { next(err); }
 });
 
@@ -236,7 +257,6 @@ router.get('/my-announcements', async (req, res, next) => {
 
     const { data } = await sbGet(`announcements?select=*&order=created_at.desc`);
     const all = Array.isArray(data) ? data : [];
-    // Filtrer : announcements globaux OU pour la classe de l'étudiant
     const filtered = all.filter((a: any) => !a.class_id || a.class_id === classId);
     res.json(successResponse(filtered));
   } catch (err) { next(err); }
@@ -302,7 +322,6 @@ router.get('/my-teachers', async (req, res, next) => {
     );
     const slotsArr = Array.isArray(slots) ? slots : [];
 
-    // Dédupliquer par teacher_id
     const teacherMap = new Map<string, any>();
     for (const slot of slotsArr) {
       if (!slot.teacher_id) continue;

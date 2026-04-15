@@ -6,11 +6,8 @@ import { createNotification, createBulkNotifications, getClassStudentProfileIds 
 
 const router = Router();
 
-// Toutes les routes teacher nécessitent d'être authentifié + rôle teacher/admin
 router.use(authenticate);
 router.use(authorize('teacher', 'admin'));
-
-// ── Helper ────────────────────────────────────────────────────────────────────
 
 function extractFirstItem(data: any): any {
   if (!data) return null;
@@ -18,7 +15,6 @@ function extractFirstItem(data: any): any {
   return data;
 }
 
-// Helper pour récupérer l'ID teacher depuis le profile_id
 async function getTeacherId(profileId: string): Promise<string> {
   const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
   const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
@@ -49,7 +45,6 @@ async function getTeacherId(profileId: string): Promise<string> {
 // CLASSES & STUDENTS
 // =============================================================================
 
-// GET /api/v1/teacher/classes — classes assignées à l'enseignant
 router.get('/classes', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
@@ -86,7 +81,6 @@ router.get('/classes', async (req, res, next) => {
   }
 });
 
-// GET /api/v1/teacher/students/:classId — élèves d'une classe
 router.get('/students/:classId', async (req, res, next) => {
   try {
     const { classId } = req.params;
@@ -116,7 +110,6 @@ router.get('/students/:classId', async (req, res, next) => {
 // EMPLOI DU TEMPS
 // =============================================================================
 
-// GET /api/v1/teacher/schedule — emploi du temps de l'enseignant
 router.get('/schedule', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
@@ -145,7 +138,6 @@ router.get('/schedule', async (req, res, next) => {
 // STATISTIQUES
 // =============================================================================
 
-// GET /api/v1/teacher/stats — stats résumées
 router.get('/stats', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
@@ -171,10 +163,9 @@ router.get('/stats', async (req, res, next) => {
 });
 
 // =============================================================================
-// NOTES (GRADES) - BUG 1 CORRIGÉ
+// NOTES (GRADES)
 // =============================================================================
 
-// GET /api/v1/teacher/grades?classId=&subjectId=&period=
 router.get('/grades', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
@@ -202,7 +193,6 @@ router.get('/grades', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ✅ BUG 1 CORRIGÉ: POST /api/v1/teacher/grades — ajouter une note
 router.post('/grades', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
@@ -214,7 +204,6 @@ router.post('/grades', async (req, res, next) => {
       throw new AppError('studentId, classId, subjectId, value et period sont requis', 400);
     }
 
-    // ✅ Colonnes correctes selon le schéma SQL
     const resInsert = await fetch(`${SUPABASE_URL}/rest/v1/grades`, {
       method: 'POST',
       headers: { 
@@ -243,7 +232,6 @@ router.post('/grades', async (req, res, next) => {
 
     if (!resInsert.ok) throw new AppError(`Failed to create grade: ${resInsert.status}`, 500);
 
-    // Notification à l'élève
     const resStudent = await fetch(`${SUPABASE_URL}/rest/v1/students?id=eq.${studentId}&select=profile_id`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
     const studentArr = (await resStudent.json()) as any[];
     const student = studentArr[0];
@@ -262,7 +250,6 @@ router.post('/grades', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// PUT /api/v1/teacher/grades/:gradeId — modifier une note
 router.put('/grades/:gradeId', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
@@ -289,7 +276,6 @@ router.put('/grades/:gradeId', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// DELETE /api/v1/teacher/grades/:gradeId
 router.delete('/grades/:gradeId', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
@@ -309,10 +295,9 @@ router.delete('/grades/:gradeId', async (req, res, next) => {
 });
 
 // =============================================================================
-// DEVOIRS (ASSIGNMENTS) - BUG 3 CORRIGÉ
+// DEVOIRS (ASSIGNMENTS)
 // =============================================================================
 
-// GET /api/v1/teacher/assignments?classId=&subjectId=&type=
 router.get('/assignments', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
@@ -335,7 +320,6 @@ router.get('/assignments', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ✅ BUG 3 CORRIGÉ: POST /api/v1/teacher/assignments — créer un devoir
 router.post('/assignments', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
@@ -348,7 +332,6 @@ router.post('/assignments', async (req, res, next) => {
       throw new AppError('classId, subjectId et title sont requis', 400);
     }
 
-    // ✅ Ajout de academic_year_id et points (au lieu de max_score)
     const resInsert = await fetch(`${SUPABASE_URL}/rest/v1/assignments`, {
       method: 'POST',
       headers: H,
@@ -369,7 +352,6 @@ router.post('/assignments', async (req, res, next) => {
 
     if (!resInsert.ok) throw new AppError(`Failed to create assignment: ${resInsert.status}`, 500);
 
-    // Notification en masse à tous les élèves de la classe
     const studentProfileIds = await getClassStudentProfileIds(classId);
     if (studentProfileIds.length > 0) {
       const notificationTitle = type === 'course' ? 'Nouveau cours publié' : 'Nouveau devoir';
@@ -389,7 +371,6 @@ router.post('/assignments', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// PUT /api/v1/teacher/assignments/:assignmentId
 router.put('/assignments/:assignmentId', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
@@ -416,7 +397,6 @@ router.put('/assignments/:assignmentId', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// DELETE /api/v1/teacher/assignments/:assignmentId
 router.delete('/assignments/:assignmentId', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
@@ -436,7 +416,6 @@ router.delete('/assignments/:assignmentId', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// GET /api/v1/teacher/assignments/:assignmentId/submissions — soumissions d'un devoir
 router.get('/assignments/:assignmentId/submissions', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
@@ -445,7 +424,6 @@ router.get('/assignments/:assignmentId/submissions', async (req, res, next) => {
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
     const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
 
-    // Vérifier que le devoir appartient à l'enseignant
     const resCheck = await fetch(`${SUPABASE_URL}/rest/v1/assignments?id=eq.${assignmentId}&teacher_id=eq.${teacherId}&select=id`, { headers: H });
     const checkArr = (await resCheck.json()) as any[];
     const assignment = checkArr[0];
@@ -457,13 +435,28 @@ router.get('/assignments/:assignmentId/submissions', async (req, res, next) => {
 
     if (!resData.ok) throw new AppError('Failed to fetch submissions', 500);
 
-    const formatted = (data || []).map((s: any) => ({ ...s, student: extractFirstItem(s.students) }));
+    // Récupérer les commentaires associés
+    const submissionIds = (data || []).map((s: any) => s.id).join(',');
+    let commentsMap = new Map();
+    if (submissionIds) {
+      const commentsRes = await fetch(`${SUPABASE_URL}/rest/v1/teacher_comments?submission_id=in.(${submissionIds})&select=*`, { headers: H });
+      const comments = (await commentsRes.json()) as any[];
+      for (const comment of comments || []) {
+        if (!commentsMap.has(comment.submission_id)) commentsMap.set(comment.submission_id, []);
+        commentsMap.get(comment.submission_id).push(comment);
+      }
+    }
+
+    const formatted = (data || []).map((s: any) => ({
+      ...s,
+      student: extractFirstItem(s.students),
+      comments: commentsMap.get(s.id) || [],
+    }));
 
     res.json(successResponse(formatted));
   } catch (err) { next(err); }
 });
 
-// PATCH /api/v1/teacher/submissions/:submissionId/grade — noter une soumission
 router.patch('/submissions/:submissionId/grade', async (req, res, next) => {
   try {
     const { submissionId } = req.params;
@@ -488,18 +481,88 @@ router.patch('/submissions/:submissionId/grade', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ✅ NOUVELLE ROUTE: Commentaire du professeur
+router.patch('/submissions/:submissionId/comment', async (req, res, next) => {
+  try {
+    const { submissionId } = req.params;
+    const { teacher_comment } = req.body;
+    if (!teacher_comment?.trim()) throw new AppError('teacher_comment est requis', 400);
+
+    const teacherId = await getTeacherId(req.user!.id);
+    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
+    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' };
+
+    // Récupérer student_id depuis la submission
+    const subRes = await fetch(`${SUPABASE_URL}/rest/v1/submissions?id=eq.${submissionId}&select=student_id`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+    const subData = (await subRes.json()) as any[];
+    const studentId = subData[0]?.student_id;
+    if (!studentId) throw new AppError('Submission not found', 404);
+
+    // Vérifier si un commentaire existe déjà
+    const existingRes = await fetch(`${SUPABASE_URL}/rest/v1/teacher_comments?submission_id=eq.${submissionId}&teacher_id=eq.${teacherId}&comment_type=eq.teacher_feedback&select=id`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+    const existing = (await existingRes.json()) as any[];
+
+    let result;
+    if (existing && existing.length > 0) {
+      // Mettre à jour le commentaire existant
+      const updateRes = await fetch(`${SUPABASE_URL}/rest/v1/teacher_comments?id=eq.${existing[0].id}`, {
+        method: 'PATCH',
+        headers: H,
+        body: JSON.stringify({
+          content: teacher_comment.trim(),
+          updated_at: new Date().toISOString(),
+        })
+      });
+      const updateData = (await updateRes.json()) as any[];
+      result = updateData[0];
+    } else {
+      // Créer un nouveau commentaire
+      const insertRes = await fetch(`${SUPABASE_URL}/rest/v1/teacher_comments`, {
+        method: 'POST',
+        headers: H,
+        body: JSON.stringify({
+          submission_id: submissionId,
+          teacher_id: teacherId,
+          student_id: studentId,
+          content: teacher_comment.trim(),
+          comment_type: 'teacher_feedback',
+          created_at: new Date().toISOString(),
+        })
+      });
+      const insertData = (await insertRes.json()) as any[];
+      result = insertData[0];
+      if (!insertRes.ok) throw new AppError('Failed to add comment', 500);
+    }
+
+    // Notification à l'élève
+    const studentRes = await fetch(`${SUPABASE_URL}/rest/v1/students?id=eq.${studentId}&select=profile_id`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+    const studentArr = (await studentRes.json()) as any[];
+    const studentProfileId = studentArr[0]?.profile_id;
+    if (studentProfileId) {
+      await createNotification({
+        recipientId: studentProfileId,
+        type: 'grade',
+        title: 'Nouveau commentaire sur votre devoir',
+        body: `Un professeur a commenté votre travail.`,
+        data: { submissionId },
+      });
+    }
+
+    res.json(successResponse(result, existing && existing.length > 0 ? 'Commentaire mis à jour' : 'Commentaire ajouté'));
+  } catch (err) { next(err); }
+});
+
 // =============================================================================
-// PRÉSENCES (ATTENDANCE) - BUG 2 CORRIGÉ
+// PRÉSENCES (ATTENDANCE)
 // =============================================================================
 
-// ✅ BUG 2 CORRIGÉ: POST /api/v1/teacher/attendance — enregistrer les présences
 router.post('/attendance', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
     const { records } = req.body;
     const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
-    // ✅ Header avec upsert
     const H = { 
       'apikey': SUPABASE_KEY, 
       'Authorization': `Bearer ${SUPABASE_KEY}`, 
@@ -512,7 +575,6 @@ router.post('/attendance', async (req, res, next) => {
       throw new AppError('records[] est requis', 400);
     }
 
-    // ✅ Utilisation de schedule_slot_id et reason (au lieu de note)
     const rows = records.map((r: any) => ({
       teacher_id:       teacherId,
       student_id:       r.studentId,
@@ -525,7 +587,6 @@ router.post('/attendance', async (req, res, next) => {
       updated_at:       new Date().toISOString(),
     }));
 
-    // ✅ Upsert avec la bonne URL
     const resUpsert = await fetch(`${SUPABASE_URL}/rest/v1/attendance`, {
       method: 'POST',
       headers: H,
@@ -538,7 +599,6 @@ router.post('/attendance', async (req, res, next) => {
       throw new AppError(`Failed to save attendance: ${resUpsert.status}`, 500);
     }
 
-    // Notifications aux parents pour les absences
     const absents = records.filter((r: any) => r.status === 'absent');
     for (const absent of absents) {
       const resStudent = await fetch(`${SUPABASE_URL}/rest/v1/students?id=eq.${absent.studentId}&select=id,profile_id`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
@@ -572,7 +632,6 @@ router.post('/attendance', async (req, res, next) => {
 // ANNONCES (ANNOUNCEMENTS)
 // =============================================================================
 
-// GET /api/v1/teacher/announcements
 router.get('/announcements', async (req, res, next) => {
   try {
     const { classId } = req.query;
@@ -592,7 +651,6 @@ router.get('/announcements', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// POST /api/v1/teacher/announcements
 router.post('/announcements', async (req, res, next) => {
   try {
     const { title, content, classId, targetRole } = req.body;
@@ -618,7 +676,6 @@ router.post('/announcements', async (req, res, next) => {
 
     if (!resInsert.ok) throw new AppError(`Failed to create announcement`, 500);
 
-    // Si une classe est ciblée, notifier les élèves
     if (classId) {
       const studentProfileIds = await getClassStudentProfileIds(classId);
       if (studentProfileIds.length > 0) {
@@ -635,7 +692,6 @@ router.post('/announcements', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// DELETE /api/v1/teacher/announcements/:announcementId
 router.delete('/announcements/:announcementId', async (req, res, next) => {
   try {
     const { announcementId } = req.params;
@@ -658,7 +714,6 @@ router.delete('/announcements/:announcementId', async (req, res, next) => {
 // MESSAGERIE
 // =============================================================================
 
-// GET /api/v1/teacher/messages/conversations
 router.get('/messages/conversations', async (req, res, next) => {
   try {
     const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
@@ -666,7 +721,6 @@ router.get('/messages/conversations', async (req, res, next) => {
     const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
     const userId = req.user!.id;
 
-    // 1. Récupère les conversation_ids où le prof participe
     const partRes = await fetch(
       `${SUPABASE_URL}/rest/v1/conversation_participants?profile_id=eq.${userId}&select=conversation_id`,
       { headers: H }
@@ -676,14 +730,12 @@ router.get('/messages/conversations', async (req, res, next) => {
 
     const convIds = parts.map((p: any) => p.conversation_id).join(',');
 
-    // 2. Récupère les conversations
     const convRes = await fetch(
       `${SUPABASE_URL}/rest/v1/conversations?id=in.(${convIds})&select=id,subject,created_at,created_by&order=created_at.desc`,
       { headers: H }
     );
     const conversations = await convRes.json() as any[];
 
-    // 3. Pour chaque conversation, récupère le dernier message
     const result = await Promise.all((conversations || []).map(async (conv: any) => {
       const msgRes = await fetch(
         `${SUPABASE_URL}/rest/v1/messages?conversation_id=eq.${conv.id}&select=content,created_at,sender_id&order=created_at.desc&limit=1`,
@@ -697,7 +749,6 @@ router.get('/messages/conversations', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// GET /api/v1/teacher/messages/:userId — conversation avec un utilisateur
 router.get('/messages/:userId', async (req, res, next) => {
   try {
     const { userId } = req.params;
@@ -714,7 +765,6 @@ router.get('/messages/:userId', async (req, res, next) => {
 
     if (!resData.ok) throw new AppError('Failed to fetch messages', 500);
 
-    // Marquer les messages reçus comme lus
     await fetch(`${SUPABASE_URL}/rest/v1/messages?receiver_id=eq.${myId}&sender_id=eq.${userId}&is_read=eq.false`, {
       method: 'PATCH',
       headers: { ...H, 'Content-Type': 'application/json' },
@@ -725,7 +775,6 @@ router.get('/messages/:userId', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// POST /api/v1/teacher/messages — envoyer un message
 router.post('/messages', async (req, res, next) => {
   try {
     const { receiverId, content } = req.body;
@@ -736,7 +785,6 @@ router.post('/messages', async (req, res, next) => {
 
     if (!receiverId || !content) throw new AppError('receiverId et content sont requis', 400);
 
-    // 1. Cherche une conversation existante entre les deux participants
     const resMyParts = await fetch(
       `${SUPABASE_URL}/rest/v1/conversation_participants?profile_id=eq.${senderId}&select=conversation_id`,
       { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
@@ -755,7 +803,6 @@ router.post('/messages', async (req, res, next) => {
       if (otherParts.length > 0) conversationId = otherParts[0].conversation_id;
     }
 
-    // 2. Si pas de conversation existante, en crée une nouvelle
     if (!conversationId) {
       const resConv = await fetch(`${SUPABASE_URL}/rest/v1/conversations`, {
         method: 'POST',
@@ -766,7 +813,6 @@ router.post('/messages', async (req, res, next) => {
       conversationId = convArr[0]?.id;
       if (!conversationId) throw new AppError('Failed to create conversation', 500);
 
-      // Ajoute les deux participants
       await fetch(`${SUPABASE_URL}/rest/v1/conversation_participants`, {
         method: 'POST',
         headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
@@ -777,7 +823,6 @@ router.post('/messages', async (req, res, next) => {
       });
     }
 
-    // 3. Insère le message avec conversation_id
     const resInsert = await fetch(`${SUPABASE_URL}/rest/v1/messages`, {
       method: 'POST',
       headers: H,
@@ -792,7 +837,6 @@ router.post('/messages', async (req, res, next) => {
 
     if (!resInsert.ok) throw new AppError('Failed to send message', 500);
 
-    // Notification au destinataire
     await createNotification({
       recipientId: receiverId,
       type: 'message',
@@ -809,7 +853,6 @@ router.post('/messages', async (req, res, next) => {
 // PROFIL ENSEIGNANT
 // =============================================================================
 
-// GET /api/v1/teacher/profile
 router.get('/profile', async (req, res, next) => {
   try {
     const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
@@ -830,7 +873,6 @@ router.get('/profile', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// PATCH /api/v1/teacher/profile — mettre à jour le profil
 router.patch('/profile', async (req, res, next) => {
   try {
     const { firstName, lastName, phone, address, gender, avatarUrl } = req.body;
