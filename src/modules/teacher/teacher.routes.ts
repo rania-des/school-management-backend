@@ -444,31 +444,7 @@ router.get('/assignments/:assignmentId/submissions', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.patch('/submissions/:submissionId/grade', async (req, res, next) => {
-  try {
-    const { submissionId } = req.params;
-    const { score, feedback } = req.body;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
-    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' };
-
-    if (score === undefined) throw new AppError('score est requis', 400);
-
-    const resUpdate = await fetch(`${SUPABASE_URL}/rest/v1/submissions?id=eq.${submissionId}`, {
-      method: 'PATCH',
-      headers: H,
-      body: JSON.stringify({ score: Number(score), feedback: feedback || null, status: 'graded' })
-    });
-    const dataArr = (await resUpdate.json()) as any[];
-    const data = dataArr[0];
-
-    if (!resUpdate.ok) throw new AppError('Failed to grade submission', 500);
-
-    res.json(successResponse(data, 'Soumission notée'));
-  } catch (err) { next(err); }
-});
-
-// ✅ ROUTE POUR AJOUTER/MODIFIER UN COMMENTAIRE (sans note)
+// ✅ ROUTE POUR AJOUTER/MODIFIER UN COMMENTAIRE (version corrigée)
 router.patch('/submissions/:submissionId/comment', async (req, res, next) => {
   try {
     const { submissionId } = req.params;
@@ -483,8 +459,8 @@ router.patch('/submissions/:submissionId/comment', async (req, res, next) => {
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
     const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' };
 
-    // 1. Récupérer la soumission pour avoir student_id
-    const subRes = await fetch(`${SUPABASE_URL}/rest/v1/submissions?id=eq.${submissionId}&select=student_id`, {
+    // 1. Récupérer la soumission pour obtenir student_id et class_id
+    const subRes = await fetch(`${SUPABASE_URL}/rest/v1/submissions?id=eq.${submissionId}&select=student_id,assignment_id`, {
       headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
     });
     const subData = (await subRes.json()) as any[];
@@ -494,7 +470,14 @@ router.patch('/submissions/:submissionId/comment', async (req, res, next) => {
       throw new AppError('Submission not found', 404);
     }
 
-    // 2. Vérifier si un commentaire professeur existe déjà
+    // 2. Récupérer l'assignement pour obtenir subject_id et class_id
+    const assignRes = await fetch(`${SUPABASE_URL}/rest/v1/assignments?id=eq.${submission.assignment_id}&select=subject_id,class_id`, {
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
+    });
+    const assignData = (await assignRes.json()) as any[];
+    const assignment = assignData[0];
+
+    // 3. Vérifier si un commentaire existe déjà pour cette soumission et ce teacher
     const existingRes = await fetch(
       `${SUPABASE_URL}/rest/v1/teacher_comments?submission_id=eq.${submissionId}&teacher_id=eq.${teacherId}&comment_type=eq.teacher_feedback&select=id`,
       { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
@@ -524,6 +507,8 @@ router.patch('/submissions/:submissionId/comment', async (req, res, next) => {
           submission_id: submissionId,
           teacher_id: teacherId,
           student_id: submission.student_id,
+          subject_id: assignment?.subject_id || null,
+          class_id: assignment?.class_id || null,
           comment: comment.trim(),
           comment_type: 'teacher_feedback',
           created_at: new Date().toISOString(),
@@ -531,10 +516,13 @@ router.patch('/submissions/:submissionId/comment', async (req, res, next) => {
       });
       const insertData = (await insertRes.json()) as any[];
       result = insertData[0];
-      if (!insertRes.ok) throw new AppError('Failed to add comment', 500);
+      if (!insertRes.ok) {
+        console.error('Insert error:', insertData);
+        throw new AppError('Failed to add comment', 500);
+      }
     }
 
-    // 3. Notifier l'élève
+    // 4. Notifier l'élève
     const studentRes = await fetch(`${SUPABASE_URL}/rest/v1/students?id=eq.${submission.student_id}&select=profile_id`, {
       headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
     });
