@@ -152,6 +152,57 @@ router.get('/attendance', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// POST /api/v1/parent/children/:studentId/attendance/:attendanceId/justify
+// Soumettre une justification d'absence
+router.post('/children/:studentId/attendance/:attendanceId/justify', async (req, res, next) => {
+  try {
+    const { studentId, attendanceId } = req.params;
+    const { reason } = req.body;
+    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
+    const H = {
+      'apikey': SUPABASE_KEY,
+      'Authorization': `Bearer ${SUPABASE_KEY}`,
+      'Content-Type': 'application/json',
+      'Prefer': 'return=representation',
+    };
+
+    if (!reason || reason.trim() === '') throw new AppError('La raison de la justification est requise', 400);
+
+    // Vérifier que l'enfant appartient au parent
+    const children = await getParentChildren(req.user!.id);
+    const child = children.find((c: any) => c.student_id === studentId);
+    if (!child) throw new AppError('Accès non autorisé à cet enfant', 403);
+
+    // Récupérer le record d'absence
+    const attRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/attendance?id=eq.${attendanceId}&student_id=eq.${studentId}&select=*`,
+      { headers: H }
+    );
+    const attData = (await attRes.json()) as any[];
+    if (!attRes.ok || !attData?.length) throw new AppError('Absence introuvable', 404);
+
+    const record = attData[0];
+    if (record.status !== 'absent' && record.status !== 'late') {
+      throw new AppError('Seules les absences et les retards peuvent être justifiés', 400);
+    }
+
+    // Mettre à jour le statut en "excused" et ajouter la raison
+    const updateRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/attendance?id=eq.${attendanceId}`,
+      {
+        method: 'PATCH',
+        headers: H,
+        body: JSON.stringify({ status: 'excused', reason: reason.trim(), updated_at: new Date().toISOString() }),
+      }
+    );
+    const updated = (await updateRes.json()) as any[];
+    if (!updateRes.ok) throw new AppError('Échec de la mise à jour de l\'absence', 500);
+
+    res.json(successResponse(updated?.[0] || { id: attendanceId, status: 'excused', reason: reason.trim() }, 'Justification soumise avec succès'));
+  } catch (err) { next(err); }
+});
+
 // =============================================================================
 // DEVOIRS (ASSIGNMENTS)
 // =============================================================================
