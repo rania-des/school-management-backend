@@ -27,35 +27,75 @@ async function getParentChildren(profileId: string): Promise<any[]> {
   const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
   const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
   
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/parent_student?parent_id=eq.${profileId}&select=student_id,students:student_id(id,student_number,profile_id,profiles:profile_id(first_name,last_name))`, {
+  console.log('🔍 getParentChildren called with profileId:', profileId);
+  
+  // 1. D'abord, trouver le parent_id à partir du profile_id
+  const parentRes = await fetch(`${SUPABASE_URL}/rest/v1/parents?profile_id=eq.${profileId}&select=id`, {
     headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
   });
+  const parents = await parentRes.json() as any[];
   
-  const data = await res.json() as any[];
-  if (!res.ok) throw new AppError('Failed to fetch children', 500);
+  if (!parents || parents.length === 0) {
+    console.log('⚠️ No parent found for profile_id:', profileId);
+    return [];
+  }
   
-  return (data || []).map((item: any) => ({
-    ...item,
-    student: extractFirstItem(item.students),
-  }));
+  const parentId = parents[0].id;
+  console.log('👨‍👩 Parent ID found:', parentId);
+  
+  // 2. Récupérer les liens parent_student
+  const psRes = await fetch(`${SUPABASE_URL}/rest/v1/parent_student?parent_id=eq.${parentId}&select=student_id`, {
+    headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
+  });
+  const links = await psRes.json() as any[];
+  
+  if (!links || links.length === 0) {
+    console.log('⚠️ No parent_student links found for parent_id:', parentId);
+    return [];
+  }
+  
+  console.log('🔗 Found links:', links.length);
+  
+  // 3. Récupérer les détails des étudiants
+  const studentIds = links.map((link: any) => link.student_id).join(',');
+  const studentsRes = await fetch(`${SUPABASE_URL}/rest/v1/students?id=in.(${studentIds})&select=*,profiles:profile_id(first_name,last_name)`, {
+    headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
+  });
+  const students = await studentsRes.json() as any[];
+  
+  console.log('👶 Students found:', students.length);
+  
+  // 4. Formater le résultat comme attendu par le frontend
+  return links.map((link: any) => {
+    const student = students.find((s: any) => s.id === link.student_id);
+    return {
+      student_id: student?.id,
+      students: student,
+    };
+  }).filter((item: any) => item.student_id);
 }
 
-// Helper pour récupérer les classes d'un étudiant
+// Helper pour récupérer les classes d'un étudiant (CORRIGÉ - utilise students directement)
 async function getStudentClasses(studentId: string): Promise<any[]> {
   const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
   const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
-  
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/class_students?student_id=eq.${studentId}&select=class_id,classes:class_id(id,name,academic_year_id)`, {
-    headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
-  });
-  
+
+  // La table est "students" avec un champ class_id direct (pas de table class_students)
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/students?id=eq.${studentId}&select=id,class_id,classes:class_id(id,name,academic_year_id)`,
+    { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
+  );
+
   const data = await res.json() as any[];
   if (!res.ok) throw new AppError('Failed to fetch student classes', 500);
-  
-  return (data || []).map((item: any) => ({
-    ...item,
-    class: extractFirstItem(item.classes),
-  }));
+
+  // Retourne un tableau avec le même format attendu par les consommateurs
+  return (data || [])
+    .filter((s: any) => s.class_id)
+    .map((s: any) => ({
+      class_id: s.class_id,
+      class: extractFirstItem(s.classes),
+    }));
 }
 
 // =============================================================================
@@ -159,10 +199,10 @@ router.get('/grades', async (req, res, next) => {
 // PRÉSENCES (ATTENDANCE)
 // =============================================================================
 
-// GET /api/v1/parent/attendance?childId=&classId=&startDate=&endDate=
+// GET /api/v1/parent/attendance?childId=
 router.get('/attendance', async (req, res, next) => {
   try {
-    const { childId, classId, startDate, endDate } = req.query;
+    const { childId } = req.query;
     const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
     const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
@@ -174,28 +214,18 @@ router.get('/attendance', async (req, res, next) => {
     const hasChild = children.some((c: any) => c.student_id === childId);
     if (!hasChild) throw new AppError('Accès non autorisé à cet enfant', 403);
     
-    let url = `${SUPABASE_URL}/rest/v1/attendance?student_id=eq.${childId}&select=*,classes:class_id(name)`;
-    if (classId) url += `&class_id=eq.${classId}`;
-    if (startDate) url += `&date=gte.${startDate}`;
-    if (endDate) url += `&date=lte.${endDate}`;
-    url += `&order=date.desc`;
+    const url = `${SUPABASE_URL}/rest/v1/attendance?student_id=eq.${childId}&select=*&order=date.desc`;
     
     const resData = await fetch(url, { headers: H });
     const data = (await resData.json()) as any[];
     
     if (!resData.ok) throw new AppError('Failed to fetch attendance', 500);
     
-    const formatted = (data || []).map((a: any) => ({
-      ...a,
-      class: extractFirstItem(a.classes),
-    }));
-    
-    res.json(successResponse(formatted));
+    res.json(successResponse(data || []));
   } catch (err) { next(err); }
 });
 
 // POST /api/v1/parent/attendance/:attendanceId/justify
-// Permet au parent de justifier une absence avec optionnellement un PDF
 router.post('/attendance/:attendanceId/justify', upload.single('justification_pdf'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { attendanceId } = req.params;
@@ -211,7 +241,7 @@ router.post('/attendance/:attendanceId/justify', upload.single('justification_pd
 
     if (!reason || !reason.trim()) throw new AppError('La raison de justification est requise', 400);
 
-    // Vérifier que le fichier uploadé est bien un PDF si fourni
+    // Vérifier que le fichier est bien un PDF si fourni
     if (req.file && req.file.mimetype !== 'application/pdf') {
       throw new AppError('Seuls les fichiers PDF sont acceptés', 400);
     }
@@ -237,7 +267,11 @@ router.post('/attendance/:attendanceId/justify', upload.single('justification_pd
     // 3. Upload PDF si fourni
     let justificationUrl: string | null = null;
     if (req.file) {
-      justificationUrl = await uploadFile(STORAGE_BUCKETS.DOCUMENTS, req.file, `justifications/${att.student_id}`);
+      justificationUrl = await uploadFile(
+        STORAGE_BUCKETS.DOCUMENTS,
+        req.file,
+        `justifications/${att.student_id}`
+      );
     }
 
     // 4. Mettre à jour l'enregistrement
@@ -252,11 +286,7 @@ router.post('/attendance/:attendanceId/justify', upload.single('justification_pd
 
     const resUpdate = await fetch(
       `${SUPABASE_URL}/rest/v1/attendance?id=eq.${attendanceId}`,
-      {
-        method: 'PATCH',
-        headers: H,
-        body: JSON.stringify(updatePayload),
-      }
+      { method: 'PATCH', headers: H, body: JSON.stringify(updatePayload) }
     );
     const updated = (await resUpdate.json()) as any[];
     if (!resUpdate.ok) throw new AppError('Échec de la mise à jour', 500);
@@ -269,10 +299,10 @@ router.post('/attendance/:attendanceId/justify', upload.single('justification_pd
 // DEVOIRS (ASSIGNMENTS)
 // =============================================================================
 
-// GET /api/v1/parent/assignments?childId=&classId=&subjectId=&type=
+// GET /api/v1/parent/assignments?childId=
 router.get('/assignments', async (req, res, next) => {
   try {
-    const { childId, classId, subjectId, type } = req.query;
+    const { childId } = req.query;
     const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
     const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
@@ -293,8 +323,6 @@ router.get('/assignments', async (req, res, next) => {
     }
     
     let url = `${SUPABASE_URL}/rest/v1/assignments?class_id=in.(${classIds})&select=*,subjects:subject_id(name),classes:class_id(name)&order=due_date.asc`;
-    if (subjectId) url += `&subject_id=eq.${subjectId}`;
-    if (type) url += `&type=eq.${type}`;
     
     const resData = await fetch(url, { headers: H });
     const data = (await resData.json()) as any[];
@@ -308,6 +336,63 @@ router.get('/assignments', async (req, res, next) => {
     }));
     
     res.json(successResponse(formatted));
+  } catch (err) { next(err); }
+});
+
+// ✅ NOUVELLE ROUTE: GET /api/v1/parent/children/:childId/submissions
+router.get('/children/:childId/submissions', async (req, res, next) => {
+  try {
+    const { childId } = req.params;
+    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
+    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
+
+    // Vérifier accès parent
+    const children = await getParentChildren(req.user!.id);
+    const hasChild = children.some((c: any) => c.student_id === childId);
+    if (!hasChild) throw new AppError('Accès non autorisé à cet enfant', 403);
+
+    // 1. Récupérer les soumissions de l'enfant
+    const subsRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/submissions?student_id=eq.${childId}&select=*&order=submitted_at.desc`,
+      { headers: H }
+    );
+    const submissions = (await subsRes.json()) as any[];
+    if (!subsRes.ok) throw new AppError('Failed to fetch submissions', 500);
+
+    if (!submissions || submissions.length === 0) {
+      return res.json(successResponse([]));
+    }
+
+    // 2. Récupérer les commentaires pour toutes ces soumissions
+    const submissionIds = submissions.map((s: any) => s.id).join(',');
+    const commentsRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/teacher_comments?submission_id=in.(${submissionIds})&select=*&order=created_at.asc`,
+      { headers: H }
+    );
+    const comments = (await commentsRes.json()) as any[];
+
+    // 3. Enrichir chaque soumission avec ses commentaires
+    const commentsMap = new Map<string, any[]>();
+    for (const c of (comments || [])) {
+      if (!commentsMap.has(c.submission_id)) commentsMap.set(c.submission_id, []);
+      commentsMap.get(c.submission_id)!.push(c);
+    }
+
+    const enriched = submissions.map((sub: any) => {
+      const subComments = commentsMap.get(sub.id) || [];
+      const teacherComment = subComments.find((c: any) => c.comment_type === 'teacher_feedback');
+      const studentReply   = subComments.find((c: any) => c.comment_type === 'student_reply');
+      return {
+        ...sub,
+        teacher_comment:  teacherComment?.comment   || null,
+        comment_added_at: teacherComment?.created_at || null,
+        student_reply:    studentReply?.comment      || null,
+        student_reply_at: studentReply?.created_at   || null,
+      };
+    });
+
+    res.json(successResponse(enriched));
   } catch (err) { next(err); }
 });
 

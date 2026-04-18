@@ -9,6 +9,9 @@ const router = Router();
 router.use(authenticate);
 router.use(authorize('teacher', 'admin'));
 
+const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
+
 function extractFirstItem(data: any): any {
   if (!data) return null;
   if (Array.isArray(data) && data.length > 0) return data[0];
@@ -16,9 +19,6 @@ function extractFirstItem(data: any): any {
 }
 
 async function getTeacherId(profileId: string): Promise<string> {
-  const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-  const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
-  
   const url = `${SUPABASE_URL}/rest/v1/teachers?profile_id=eq.${profileId}&select=id`;
   
   const res = await fetch(url, {
@@ -49,11 +49,8 @@ router.get('/classes', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
 
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
-
     const resSlots = await fetch(
-      `${SUPABASE_URL}/rest/v1/schedule_slots?teacher_id=eq.${teacherId}&is_active=eq.true&select=class_id,subject_id,classes:class_id(id,name),subjects:subject_id(id,name)`,
+      `${SUPABASE_URL}/rest/v1/schedule_slots?teacher_id=eq.${teacherId}&is_active=eq.true&select=class_id,subject_id,classes:class_id(id,name,academic_year_id),subjects:subject_id(id,name)`,
       { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
     );
     const slots = (await resSlots.json()) as any[];
@@ -67,10 +64,11 @@ router.get('/classes', async (req, res, next) => {
         const classItem   = extractFirstItem(slot.classes);
         const subjectItem = extractFirstItem(slot.subjects);
         classMap.set(key, {
-          classId:     slot.class_id,
-          className:   classItem?.name   || `Classe ${slot.class_id}`,
-          subjectId:   slot.subject_id,
-          subjectName: subjectItem?.name || 'Matière',
+          classId:         slot.class_id,
+          className:       classItem?.name   || `Classe ${slot.class_id}`,
+          subjectId:       slot.subject_id,
+          subjectName:     subjectItem?.name || 'Matière',
+          academicYearId:  classItem?.academic_year_id || null,
         });
       }
     }
@@ -84,8 +82,6 @@ router.get('/classes', async (req, res, next) => {
 router.get('/students/:classId', async (req, res, next) => {
   try {
     const { classId } = req.params;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
 
     const resStudents = await fetch(
       `${SUPABASE_URL}/rest/v1/students?class_id=eq.${classId}&select=id,profile_id,student_number,profiles:profile_id(first_name,last_name,email,avatar_url)`,
@@ -113,8 +109,6 @@ router.get('/students/:classId', async (req, res, next) => {
 router.get('/schedule', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
 
     const resSlots = await fetch(
       `${SUPABASE_URL}/rest/v1/schedule_slots?teacher_id=eq.${teacherId}&is_active=eq.true&select=*,subjects:subject_id(name,color),classes:class_id(name)&order=day_of_week,start_time`,
@@ -141,8 +135,6 @@ router.get('/schedule', async (req, res, next) => {
 router.get('/stats', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
 
     const [classesRes, assignmentsRes, gradesRes] = await Promise.all([
       fetch(`${SUPABASE_URL}/rest/v1/schedule_slots?teacher_id=eq.${teacherId}&is_active=eq.true&select=class_id`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }),
@@ -170,8 +162,6 @@ router.get('/grades', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
     const { classId, subjectId, period } = req.query;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
 
     let url = `${SUPABASE_URL}/rest/v1/grades?teacher_id=eq.${teacherId}&select=*,students:student_id(id,student_number,profiles:profile_id(first_name,last_name)),subjects:subject_id(name)&order=created_at.desc`;
     if (classId)   url += `&class_id=eq.${classId}`;
@@ -197,12 +187,25 @@ router.post('/grades', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
     const { studentId, classId, subjectId, value, maxValue, period, type, comment } = req.body;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
 
     if (!studentId || !classId || !subjectId || value === undefined || !period) {
       throw new AppError('studentId, classId, subjectId, value et period sont requis', 400);
     }
+
+    const insertBody = {
+      teacher_id:       teacherId,
+      student_id:       studentId,
+      class_id:         classId,
+      subject_id:       subjectId,
+      academic_year_id: req.body.academicYearId || null,
+      score:            Number(value ?? req.body.score),
+      max_score:        maxValue ? Number(maxValue) : (req.body.maxScore ? Number(req.body.maxScore) : 20),
+      coefficient:      req.body.coefficient ? Number(req.body.coefficient) : 1,
+      title:            req.body.title || type || 'Note',
+      period:           period,
+      grade_date:       req.body.gradeDate || new Date().toISOString().split('T')[0],
+      description:      comment || req.body.description || null,
+    };
 
     const resInsert = await fetch(`${SUPABASE_URL}/rest/v1/grades`, {
       method: 'POST',
@@ -212,25 +215,16 @@ router.post('/grades', async (req, res, next) => {
         'Content-Type': 'application/json', 
         'Prefer': 'return=representation' 
       },
-      body: JSON.stringify({
-        teacher_id:       teacherId,
-        student_id:       studentId,
-        class_id:         classId,
-        subject_id:       subjectId,
-        academic_year_id: req.body.academicYearId || null,
-        score:            Number(value ?? req.body.score),
-        max_score:        maxValue ? Number(maxValue) : (req.body.maxScore ? Number(req.body.maxScore) : 20),
-        coefficient:      req.body.coefficient ? Number(req.body.coefficient) : 1,
-        title:            req.body.title || type || 'Note',
-        period:           period,
-        grade_date:       req.body.gradeDate || new Date().toISOString().split('T')[0],
-        description:      comment || req.body.description || null,
-      })
+      body: JSON.stringify(insertBody)
     });
-    const dataArr = (await resInsert.json()) as any[];
-    const data = dataArr[0];
 
-    if (!resInsert.ok) throw new AppError(`Failed to create grade: ${resInsert.status}`, 500);
+    const rawText = await resInsert.text();
+    if (!resInsert.ok) {
+      console.error('Supabase insert error:', rawText);
+      throw new AppError(`Failed to create grade: ${resInsert.status} - ${rawText}`, 500);
+    }
+    const dataArr = JSON.parse(rawText) as any[];
+    const data = dataArr[0];
 
     const resStudent = await fetch(`${SUPABASE_URL}/rest/v1/students?id=eq.${studentId}&select=profile_id`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
     const studentArr = (await resStudent.json()) as any[];
@@ -255,8 +249,6 @@ router.put('/grades/:gradeId', async (req, res, next) => {
     const teacherId = await getTeacherId(req.user!.id);
     const { gradeId } = req.params;
     const { value, maxValue, comment } = req.body;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
 
     const updateBody: any = { description: comment };
     if (value !== undefined) updateBody.score = Number(value);
@@ -267,10 +259,16 @@ router.put('/grades/:gradeId', async (req, res, next) => {
       headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
       body: JSON.stringify(updateBody)
     });
-    const dataArr = (await resUpdate.json()) as any[];
+
+    const rawText = await resUpdate.text();
+    if (!resUpdate.ok) {
+      console.error('Supabase update error:', rawText);
+      throw new AppError(`Failed to update grade: ${resUpdate.status} - ${rawText}`, 500);
+    }
+    const dataArr = JSON.parse(rawText) as any[];
     const data = dataArr[0];
 
-    if (!resUpdate.ok || !data) throw new AppError('Grade not found or not authorized', 404);
+    if (!data) throw new AppError('Grade not found or not authorized', 404);
 
     res.json(successResponse(data, 'Note modifiée avec succès'));
   } catch (err) { next(err); }
@@ -280,15 +278,16 @@ router.delete('/grades/:gradeId', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
     const { gradeId } = req.params;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
 
     const resDelete = await fetch(`${SUPABASE_URL}/rest/v1/grades?id=eq.${gradeId}&teacher_id=eq.${teacherId}`, {
       method: 'DELETE',
       headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
     });
 
-    if (!resDelete.ok) throw new AppError('Failed to delete grade', 500);
+    if (!resDelete.ok) {
+      const rawText = await resDelete.text();
+      throw new AppError(`Failed to delete grade: ${resDelete.status} - ${rawText}`, 500);
+    }
 
     res.json(successResponse(null, 'Note supprimée'));
   } catch (err) { next(err); }
@@ -302,8 +301,6 @@ router.get('/assignments', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
     const { classId, subjectId, type } = req.query;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
     const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
     
     let url = `${SUPABASE_URL}/rest/v1/assignments?teacher_id=eq.${teacherId}&select=*&order=due_date`;
@@ -323,34 +320,52 @@ router.get('/assignments', async (req, res, next) => {
 router.post('/assignments', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
-    const { classId, subjectId, title, description, dueDate, type, maxScore } = req.body;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
+    const { classId, subjectId, title, description, dueDate, type, maxScore, fileUrl } = req.body;
     const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' };
 
     if (!classId || !subjectId || !title) {
       throw new AppError('classId, subjectId et title sont requis', 400);
     }
 
+    let academicYearId = req.body.academicYearId || null;
+    if (!academicYearId) {
+      const resClass = await fetch(
+        `${SUPABASE_URL}/rest/v1/classes?id=eq.${classId}&select=academic_year_id`,
+        { headers: H }
+      );
+      if (resClass.ok) {
+        const classArr = (await resClass.json()) as any[];
+        academicYearId = classArr?.[0]?.academic_year_id || null;
+      }
+    }
+
+    const insertBody: any = {
+      teacher_id:   teacherId,
+      class_id:     classId,
+      subject_id:   subjectId,
+      title,
+      description:  description || null,
+      due_date:     dueDate || null,
+      type:         type || 'homework',
+      points:       maxScore ? Number(maxScore) : null,
+    };
+
+    if (academicYearId) insertBody.academic_year_id = academicYearId;
+    if (fileUrl) insertBody.file_url = fileUrl;
+
     const resInsert = await fetch(`${SUPABASE_URL}/rest/v1/assignments`, {
       method: 'POST',
       headers: H,
-      body: JSON.stringify({
-        teacher_id:       teacherId,
-        class_id:         classId,
-        subject_id:       subjectId,
-        academic_year_id: req.body.academicYearId || null,
-        title,
-        description:      description || null,
-        due_date:         dueDate || null,
-        type:             type || 'homework',
-        points:           maxScore ? Number(maxScore) : null,
-      })
+      body: JSON.stringify(insertBody),
     });
-    const dataArr = (await resInsert.json()) as any[];
-    const data = dataArr[0];
 
-    if (!resInsert.ok) throw new AppError(`Failed to create assignment: ${resInsert.status}`, 500);
+    const rawText = await resInsert.text();
+    if (!resInsert.ok) {
+      console.error('Supabase insert error:', rawText);
+      throw new AppError(`Failed to create assignment: ${resInsert.status} - ${rawText}`, 500);
+    }
+    const dataArr = JSON.parse(rawText) as any[];
+    const data = dataArr[0];
 
     const studentProfileIds = await getClassStudentProfileIds(classId);
     if (studentProfileIds.length > 0) {
@@ -376,8 +391,6 @@ router.put('/assignments/:assignmentId', async (req, res, next) => {
     const teacherId = await getTeacherId(req.user!.id);
     const { assignmentId } = req.params;
     const { title, description, dueDate, type, maxScore } = req.body;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
     const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' };
 
     const updateBody: any = { title, description, due_date: dueDate, type };
@@ -388,10 +401,16 @@ router.put('/assignments/:assignmentId', async (req, res, next) => {
       headers: H,
       body: JSON.stringify(updateBody)
     });
-    const dataArr = (await resUpdate.json()) as any[];
+
+    const rawText = await resUpdate.text();
+    if (!resUpdate.ok) {
+      console.error('Supabase update error:', rawText);
+      throw new AppError(`Failed to update assignment: ${resUpdate.status} - ${rawText}`, 500);
+    }
+    const dataArr = JSON.parse(rawText) as any[];
     const data = dataArr[0];
 
-    if (!resUpdate.ok || !data) throw new AppError('Assignment not found or not authorized', 404);
+    if (!data) throw new AppError('Assignment not found or not authorized', 404);
 
     res.json(successResponse(data, 'Devoir modifié'));
   } catch (err) { next(err); }
@@ -401,8 +420,6 @@ router.delete('/assignments/:assignmentId', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
     const { assignmentId } = req.params;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
     const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
 
     const resDelete = await fetch(`${SUPABASE_URL}/rest/v1/assignments?id=eq.${assignmentId}&teacher_id=eq.${teacherId}`, {
@@ -410,22 +427,22 @@ router.delete('/assignments/:assignmentId', async (req, res, next) => {
       headers: H
     });
 
-    if (!resDelete.ok) throw new AppError('Failed to delete assignment', 500);
+    if (!resDelete.ok) {
+      const rawText = await resDelete.text();
+      throw new AppError(`Failed to delete assignment: ${resDelete.status} - ${rawText}`, 500);
+    }
 
     res.json(successResponse(null, 'Devoir supprimé'));
   } catch (err) { next(err); }
 });
 
-// GET /teacher/assignments/:assignmentId/submissions - avec commentaires (prof et étudiant)
+// GET /teacher/assignments/:assignmentId/submissions
 router.get('/assignments/:assignmentId/submissions', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
     const { assignmentId } = req.params;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
     const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
 
-    // Vérifier que l'enseignant a bien accès à ce devoir
     const checkRes = await fetch(
       `${SUPABASE_URL}/rest/v1/assignments?id=eq.${assignmentId}&teacher_id=eq.${teacherId}&select=id`,
       { headers: H }
@@ -435,7 +452,6 @@ router.get('/assignments/:assignmentId/submissions', async (req, res, next) => {
       throw new AppError('Assignment not found or not authorized', 404);
     }
 
-    // Récupérer les soumissions avec les informations élèves
     const submissionsRes = await fetch(
       `${SUPABASE_URL}/rest/v1/submissions?assignment_id=eq.${assignmentId}&select=*,students:student_id(id,student_number,profiles:profile_id(first_name,last_name))`,
       { headers: H }
@@ -443,10 +459,9 @@ router.get('/assignments/:assignmentId/submissions', async (req, res, next) => {
     const submissions = (await submissionsRes.json()) as any[];
     if (!submissionsRes.ok) throw new AppError('Failed to fetch submissions', 500);
 
-    // Récupérer TOUS les commentaires associés à ces soumissions (teacher_feedback + student_reply)
     const submissionIds = submissions.map((s: any) => s.id).join(',');
-    let teacherCommentsMap = new Map(); // commentaire du prof
-    let studentRepliesMap = new Map();  // réponse de l'étudiant
+    let teacherCommentsMap = new Map();
+    let studentRepliesMap = new Map();
 
     if (submissionIds) {
       const commentsRes = await fetch(
@@ -469,7 +484,6 @@ router.get('/assignments/:assignmentId/submissions', async (req, res, next) => {
       }
     }
 
-    // Fusionner les données
     const formatted = submissions.map((sub: any) => {
       const studentObj = sub.students;
       const profile = studentObj?.profiles;
@@ -499,8 +513,6 @@ router.patch('/submissions/:submissionId/grade', async (req, res, next) => {
   try {
     const { submissionId } = req.params;
     const { score, feedback } = req.body;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
     const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' };
 
     if (score === undefined) throw new AppError('score est requis', 400);
@@ -510,16 +522,20 @@ router.patch('/submissions/:submissionId/grade', async (req, res, next) => {
       headers: H,
       body: JSON.stringify({ score: Number(score), feedback: feedback || null, status: 'graded' })
     });
-    const dataArr = (await resUpdate.json()) as any[];
-    const data = dataArr[0];
 
-    if (!resUpdate.ok) throw new AppError('Failed to grade submission', 500);
+    const rawText = await resUpdate.text();
+    if (!resUpdate.ok) {
+      console.error('Supabase update error:', rawText);
+      throw new AppError(`Failed to grade submission: ${resUpdate.status} - ${rawText}`, 500);
+    }
+    const dataArr = JSON.parse(rawText) as any[];
+    const data = dataArr[0];
 
     res.json(successResponse(data, 'Soumission notée'));
   } catch (err) { next(err); }
 });
 
-// ROUTE POUR AJOUTER/MODIFIER UN COMMENTAIRE (professeur)
+// ✅ CORRECTION: Route pour les commentaires (sans score)
 router.patch('/submissions/:submissionId/comment', async (req, res, next) => {
   try {
     const { submissionId } = req.params;
@@ -530,11 +546,8 @@ router.patch('/submissions/:submissionId/comment', async (req, res, next) => {
     }
 
     const teacherId = await getTeacherId(req.user!.id);
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
     const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' };
 
-    // 1. Récupérer la soumission pour avoir student_id
     const subRes = await fetch(`${SUPABASE_URL}/rest/v1/submissions?id=eq.${submissionId}&select=student_id`, {
       headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
     });
@@ -545,7 +558,6 @@ router.patch('/submissions/:submissionId/comment', async (req, res, next) => {
       throw new AppError('Submission not found', 404);
     }
 
-    // 2. Vérifier si un commentaire existe déjà
     const existingRes = await fetch(
       `${SUPABASE_URL}/rest/v1/teacher_comments?submission_id=eq.${submissionId}&teacher_id=eq.${teacherId}&comment_type=eq.teacher_feedback&select=id`,
       { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
@@ -554,7 +566,6 @@ router.patch('/submissions/:submissionId/comment', async (req, res, next) => {
 
     let result;
     if (existing && existing.length > 0) {
-      // Mise à jour
       const updateRes = await fetch(`${SUPABASE_URL}/rest/v1/teacher_comments?id=eq.${existing[0].id}`, {
         method: 'PATCH',
         headers: H,
@@ -563,11 +574,15 @@ router.patch('/submissions/:submissionId/comment', async (req, res, next) => {
           updated_at: new Date().toISOString(),
         })
       });
-      const updateData = (await updateRes.json()) as any[];
+
+      const rawText = await updateRes.text();
+      if (!updateRes.ok) {
+        console.error('Supabase update error:', rawText);
+        throw new AppError(`Failed to update comment: ${updateRes.status} - ${rawText}`, 500);
+      }
+      const updateData = JSON.parse(rawText) as any[];
       result = updateData[0];
-      if (!updateRes.ok) throw new AppError('Failed to update comment', 500);
     } else {
-      // Création
       const insertRes = await fetch(`${SUPABASE_URL}/rest/v1/teacher_comments`, {
         method: 'POST',
         headers: H,
@@ -580,15 +595,16 @@ router.patch('/submissions/:submissionId/comment', async (req, res, next) => {
           created_at: new Date().toISOString(),
         })
       });
-      const insertData = (await insertRes.json()) as any[];
-      result = insertData[0];
+
+      const rawText = await insertRes.text();
       if (!insertRes.ok) {
-        console.error('Insert error:', insertData);
-        throw new AppError('Failed to add comment', 500);
+        console.error('Supabase insert error:', rawText);
+        throw new AppError(`Failed to add comment: ${insertRes.status} - ${rawText}`, 500);
       }
+      const insertData = JSON.parse(rawText) as any[];
+      result = insertData[0];
     }
 
-    // 3. Notifier l'élève
     const studentRes = await fetch(`${SUPABASE_URL}/rest/v1/students?id=eq.${submission.student_id}&select=profile_id`, {
       headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
     });
@@ -625,8 +641,6 @@ router.post('/attendance', async (req, res, next) => {
   try {
     const teacherId = await getTeacherId(req.user!.id);
     const { records } = req.body;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
     const H = { 
       'apikey': SUPABASE_KEY, 
       'Authorization': `Bearer ${SUPABASE_KEY}`, 
@@ -656,12 +670,13 @@ router.post('/attendance', async (req, res, next) => {
       headers: H,
       body: JSON.stringify(rows)
     });
-    const data = (await resUpsert.json()) as any[];
 
+    const rawText = await resUpsert.text();
     if (!resUpsert.ok) {
-      console.error('Attendance upsert error:', await resUpsert.text());
-      throw new AppError(`Failed to save attendance: ${resUpsert.status}`, 500);
+      console.error('Attendance upsert error:', rawText);
+      throw new AppError(`Failed to save attendance: ${resUpsert.status} - ${rawText}`, 500);
     }
+    const data = JSON.parse(rawText) as any[];
 
     const absents = records.filter((r: any) => r.status === 'absent');
     for (const absent of absents) {
@@ -699,8 +714,6 @@ router.post('/attendance', async (req, res, next) => {
 router.get('/announcements', async (req, res, next) => {
   try {
     const { classId } = req.query;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
     const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
 
     let url = `${SUPABASE_URL}/rest/v1/announcements?or=(author_id.eq.${req.user!.id},target_role.eq.teacher,target_role.is.null)&order=created_at.desc`;
@@ -718,8 +731,6 @@ router.get('/announcements', async (req, res, next) => {
 router.post('/announcements', async (req, res, next) => {
   try {
     const { title, content, classId, targetRole } = req.body;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
     const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' };
 
     if (!title || !content) throw new AppError('title et content sont requis', 400);
@@ -735,10 +746,14 @@ router.post('/announcements', async (req, res, next) => {
         target_role: targetRole || null,
       })
     });
-    const dataArr = (await resInsert.json()) as any[];
-    const data = dataArr[0];
 
-    if (!resInsert.ok) throw new AppError(`Failed to create announcement`, 500);
+    const rawText = await resInsert.text();
+    if (!resInsert.ok) {
+      console.error('Supabase insert error:', rawText);
+      throw new AppError(`Failed to create announcement: ${resInsert.status} - ${rawText}`, 500);
+    }
+    const dataArr = JSON.parse(rawText) as any[];
+    const data = dataArr[0];
 
     if (classId) {
       const studentProfileIds = await getClassStudentProfileIds(classId);
@@ -759,8 +774,6 @@ router.post('/announcements', async (req, res, next) => {
 router.delete('/announcements/:announcementId', async (req, res, next) => {
   try {
     const { announcementId } = req.params;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
     const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
 
     const resDelete = await fetch(`${SUPABASE_URL}/rest/v1/announcements?id=eq.${announcementId}&author_id=eq.${req.user!.id}`, {
@@ -768,7 +781,10 @@ router.delete('/announcements/:announcementId', async (req, res, next) => {
       headers: H
     });
 
-    if (!resDelete.ok) throw new AppError('Failed to delete announcement', 500);
+    if (!resDelete.ok) {
+      const rawText = await resDelete.text();
+      throw new AppError(`Failed to delete announcement: ${resDelete.status} - ${rawText}`, 500);
+    }
 
     res.json(successResponse(null, 'Annonce supprimée'));
   } catch (err) { next(err); }
@@ -780,8 +796,6 @@ router.delete('/announcements/:announcementId', async (req, res, next) => {
 
 router.get('/messages/conversations', async (req, res, next) => {
   try {
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
     const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
     const userId = req.user!.id;
 
@@ -816,9 +830,7 @@ router.get('/messages/conversations', async (req, res, next) => {
 router.get('/messages/:userId', async (req, res, next) => {
   try {
     const { userId } = req.params;
-    const myId       = req.user!.id;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
+    const myId = req.user!.id;
     const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
 
     const resData = await fetch(
@@ -842,8 +854,6 @@ router.get('/messages/:userId', async (req, res, next) => {
 router.post('/messages', async (req, res, next) => {
   try {
     const { receiverId, content } = req.body;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
     const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' };
     const senderId = req.user!.id;
 
@@ -896,10 +906,14 @@ router.post('/messages', async (req, res, next) => {
         content,
       })
     });
-    const dataArr = (await resInsert.json()) as any[];
-    const data = dataArr[0];
 
-    if (!resInsert.ok) throw new AppError('Failed to send message', 500);
+    const rawText = await resInsert.text();
+    if (!resInsert.ok) {
+      console.error('Supabase insert error:', rawText);
+      throw new AppError(`Failed to send message: ${resInsert.status} - ${rawText}`, 500);
+    }
+    const dataArr = JSON.parse(rawText) as any[];
+    const data = dataArr[0];
 
     await createNotification({
       recipientId: receiverId,
@@ -919,8 +933,6 @@ router.post('/messages', async (req, res, next) => {
 
 router.get('/profile', async (req, res, next) => {
   try {
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
     const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
 
     const resProfile = await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${req.user!.id}&select=*`, { headers: H });
@@ -940,8 +952,6 @@ router.get('/profile', async (req, res, next) => {
 router.patch('/profile', async (req, res, next) => {
   try {
     const { firstName, lastName, phone, address, gender, avatarUrl } = req.body;
-    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
     const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' };
 
     const updates: Record<string, any> = {};
@@ -961,13 +971,60 @@ router.patch('/profile', async (req, res, next) => {
       headers: H,
       body: JSON.stringify(updates)
     });
-    const dataArr = (await resUpdate.json()) as any[];
-    const data = dataArr[0];
 
-    if (!resUpdate.ok) throw new AppError('Failed to update profile', 500);
+    const rawText = await resUpdate.text();
+    if (!resUpdate.ok) {
+      console.error('Supabase update error:', rawText);
+      throw new AppError(`Failed to update profile: ${resUpdate.status} - ${rawText}`, 500);
+    }
+    const dataArr = JSON.parse(rawText) as any[];
+    const data = dataArr[0];
 
     res.json(successResponse(data, 'Profil mis à jour'));
   } catch (err) { next(err); }
+});
+
+// =============================================================================
+// TÉLÉCHARGEMENT DE FICHIERS (travaux à faire, cours, compte-rendus, soumissions)
+// =============================================================================
+router.get('/download-file', async (req, res, next) => {
+  try {
+    const { url, name } = req.query;
+
+    if (!url || typeof url !== 'string') {
+      throw new AppError('URL parameter required', 400);
+    }
+
+    // Autoriser les deux buckets : assignments (devoirs/cours) et submissions (travaux élèves)
+    const allowedPrefixes = [
+      `${SUPABASE_URL}/storage/v1/object/assignments/`,
+      `${SUPABASE_URL}/storage/v1/object/submissions/`,
+      `${SUPABASE_URL}/storage/v1/object/public/assignments/`,
+      `${SUPABASE_URL}/storage/v1/object/public/submissions/`,
+    ];
+    const isAllowed = allowedPrefixes.some(prefix => url.startsWith(prefix));
+    if (!isAllowed) {
+      throw new AppError('Invalid file URL', 403);
+    }
+
+    const response = await fetch(url, {
+      headers: {
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`,
+      },
+    });
+
+    if (!response.ok) throw new AppError('File not found', 404);
+
+    const buffer = await response.arrayBuffer();
+    const fileName = (typeof name === 'string' ? name : null) || url.split('/').pop() || 'file';
+
+    res.setHeader('Content-Type', response.headers.get('content-type') || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.send(Buffer.from(buffer));
+  } catch (err) {
+    next(err);
+  }
 });
 
 export default router;

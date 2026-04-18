@@ -4,7 +4,7 @@
   "description": "Backend API for School Management Platform — Teacher module",
   "main": "dist/server.js",
   "scripts": {
-    "dev": "tsx watch server.ts",
+    "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "npx tsx src/server.ts",
     "clean": "rm -rf dist"
@@ -23,7 +23,6 @@
     "nodemailer": "^8.0.5",
     "pdfkit": "^0.18.0",
     "uuid": "^9.0.0",
-    
     "zod": "^3.25.76"
   },
   "devDependencies": {

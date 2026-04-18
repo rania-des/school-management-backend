@@ -3,8 +3,11 @@ import { authenticate, authorize } from '../../middleware/auth.middleware';
 import { supabaseAdmin } from '../../config/supabase';
 import { AppError } from '../../middleware/error.middleware';
 import { successResponse } from '../../utils/pagination';
+import multer from 'multer';
 
 const router = Router();
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } }); // 20MB
+
 router.use(authenticate);
 router.use(authorize('student', 'admin', 'parent'));
 
@@ -162,9 +165,6 @@ router.get('/my-assignments', async (req, res, next) => {
 
     console.log(`📊 Assignments trouvés: ${assignments.length}`);
     console.log(`📊 Submissions trouvées: ${submissions.length}`);
-    for (const sub of submissions) {
-      console.log(`   - Submission ID: ${sub.id}, Assignment ID: ${sub.assignment_id}, Status: ${sub.status}`);
-    }
 
     res.json(successResponse({
       studentId: student.id,
@@ -179,16 +179,47 @@ router.get('/my-assignments', async (req, res, next) => {
 });
 
 // ─── POST /student/my-assignments/:assignmentId/submit ────────────────────────
-// ✅ VERSION CORRIGÉE avec logs détaillés
-router.post('/my-assignments/:assignmentId/submit', async (req, res, next) => {
+// ✅ VERSION CORRIGÉE - Accepte file_url direct du front
+router.post('/my-assignments/:assignmentId/submit', upload.single('file'), async (req, res, next) => {
   try {
     const { assignmentId } = req.params;
-    const { file_data, file_name } = req.body;
+    
+    // Nouvelle méthode: file_url directement depuis le front (upload déjà fait)
+    const { file_url, file_name: bodyFileName } = req.body;
+    let fileUrl: string | undefined = file_url;
+    let fileName: string | undefined = bodyFileName;
 
     console.log(`\n========== [SUBMIT] NOUVELLE SOUMISSION ==========`);
     console.log(`📤 Assignment ID: ${assignmentId}`);
-    console.log(`📎 file_name: ${file_name}`);
-    console.log(`📎 file_data présent: ${!!file_data}, taille: ${file_data?.length || 0} chars`);
+    console.log(`📎 file_url: ${fileUrl || 'non fourni'}`);
+    console.log(`📎 file_name: ${fileName || 'non fourni'}`);
+
+    // Rétrocompatibilité: si pas de file_url mais un fichier uploadé via multer
+    if (!fileUrl && req.file) {
+      console.log(`🔄 Fallback: upload via multer (ancienne méthode)`);
+      try {
+        const buffer = req.file.buffer;
+        const mimeType = req.file.mimetype;
+        const fname = req.file.originalname;
+        fileName = fname;
+        const ext = fname.split('.').pop() || 'bin';
+        const filePath = `fallback/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+
+        const { error: uploadError } = await supabaseAdmin.storage
+          .from('submissions')
+          .upload(filePath, buffer, { contentType: mimeType, cacheControl: '3600', upsert: true });
+
+        if (!uploadError) {
+          const { data: urlData } = supabaseAdmin.storage.from('submissions').getPublicUrl(filePath);
+          fileUrl = urlData.publicUrl;
+          console.log(`✅ Fichier uploadé via fallback: ${fileUrl}`);
+        } else {
+          console.error('❌ Fallback upload error:', uploadError);
+        }
+      } catch (uploadErr) {
+        console.error('❌ Fallback upload exception:', uploadErr);
+      }
+    }
 
     // 1. Récupérer l'étudiant
     const { data: students } = await sbGet(`students?profile_id=eq.${req.user!.id}&select=id`);
@@ -212,57 +243,7 @@ router.post('/my-assignments/:assignmentId/submit', async (req, res, next) => {
     const isLate = assignment.due_date && new Date() > new Date(assignment.due_date);
     console.log(`⏰ Est en retard: ${isLate}`);
 
-    // 3. Upload du fichier vers Supabase Storage
-    let fileUrl: string | undefined;
-    if (file_data && file_name) {
-      try {
-        // Extraire le base64 et le mime type
-        let base64Data = file_data;
-        let mimeType = 'application/octet-stream';
-        
-        if (file_data.includes(',')) {
-          const matches = file_data.match(/^data:([^;]+);base64,(.+)$/);
-          if (matches) {
-            mimeType = matches[1];
-            base64Data = matches[2];
-            console.log(`📄 MIME type détecté: ${mimeType}`);
-          } else {
-            base64Data = file_data.split(',')[1];
-          }
-        }
-        
-        const buffer = Buffer.from(base64Data, 'base64');
-        const ext = file_name.split('.').pop() || 'bin';
-        const filePath = `${student.id}/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
-
-        console.log(`📤 Upload du fichier vers: ${filePath}`);
-        console.log(`📦 Taille du buffer: ${buffer.length} bytes`);
-
-        const { error: uploadError, data: uploadData } = await supabaseAdmin.storage
-          .from('submissions')
-          .upload(filePath, buffer, {
-            contentType: mimeType,
-            cacheControl: '3600',
-            upsert: true,
-          });
-
-        if (uploadError) {
-          console.error('❌ Upload error:', uploadError);
-        } else {
-          const { data: urlData } = supabaseAdmin.storage
-            .from('submissions')
-            .getPublicUrl(filePath);
-          fileUrl = urlData.publicUrl;
-          console.log(`✅ Fichier uploadé avec succès: ${fileUrl}`);
-        }
-      } catch (uploadErr) {
-        console.error('❌ Upload exception:', uploadErr);
-      }
-    } else {
-      console.log(`⚠️ Aucun fichier à uploader (soumission sans fichier)`);
-    }
-
-    // 4. Vérifier si une soumission existe déjà pour cet assignment
+    // 3. Vérifier si une soumission existe déjà
     const { data: existing } = await sbGet(
       `submissions?student_id=eq.${student.id}&assignment_id=eq.${assignmentId}&select=id,status`
     );
@@ -274,14 +255,15 @@ router.post('/my-assignments/:assignmentId/submit', async (req, res, next) => {
       submitted_at: new Date().toISOString(),
       status: isLate ? 'late' : 'submitted',
     };
-    if (fileUrl) submissionBody.file_url = fileUrl;
-    if (file_name) submissionBody.file_name = file_name;
+    if (fileUrl) {
+      submissionBody.file_url = fileUrl;
+      submissionBody.file_name = fileName;
+    }
 
     let result;
     if (existingArr.length > 0) {
       // Mise à jour
       console.log(`🔄 Mise à jour de la soumission existante: ${existingArr[0].id}`);
-      console.log(`📝 Données de mise à jour:`, submissionBody);
       
       const updateRes = await fetch(`${SUPABASE_URL}/rest/v1/submissions?id=eq.${existingArr[0].id}`, {
         method: 'PATCH',
@@ -302,11 +284,6 @@ router.post('/my-assignments/:assignmentId/submit', async (req, res, next) => {
     } else {
       // Création
       console.log(`✨ Création d'une nouvelle soumission`);
-      console.log(`📝 Données d'insertion:`, {
-        assignment_id: assignmentId,
-        student_id: student.id,
-        ...submissionBody,
-      });
       
       const insertRes = await fetch(`${SUPABASE_URL}/rest/v1/submissions`, {
         method: 'POST',
@@ -327,7 +304,6 @@ router.post('/my-assignments/:assignmentId/submit', async (req, res, next) => {
       }
       
       console.log(`✅ Nouvelle soumission créée avec succès! ID: ${result?.id}`);
-      console.log(`📊 Soumission créée pour assignment: ${assignmentId}`);
       console.log(`==========================================\n`);
       return res.status(201).json(successResponse(result, 'Submission created'));
     }
