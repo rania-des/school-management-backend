@@ -3,8 +3,12 @@ import { authenticate, authorize } from '../../middleware/auth.middleware';
 import { AppError } from '../../middleware/error.middleware';
 import { successResponse } from '../../utils/pagination';
 import { createNotification, createBulkNotifications, getClassStudentProfileIds } from '../../utils/notifications';
+import multer from 'multer';
+import { uploadFile, STORAGE_BUCKETS } from '../../utils/storage';
+import type { Request, Response, NextFunction } from 'express';
 
 const router = Router();
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }); // 10MB max
 
 // Toutes les routes parent nécessitent d'être authentifié + rôle parent
 router.use(authenticate);
@@ -72,6 +76,44 @@ router.get('/children/:childId/classes', async (req, res, next) => {
     const { childId } = req.params;
     const classes = await getStudentClasses(childId);
     res.json(successResponse(classes));
+  } catch (err) { next(err); }
+});
+
+// GET /api/v1/parent/children/:childId/schedule — emploi du temps d'un enfant
+router.get('/children/:childId/schedule', async (req, res, next) => {
+  try {
+    const { childId } = req.params;
+    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
+    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
+
+    // Vérifier que l'enfant appartient au parent
+    const children = await getParentChildren(req.user!.id);
+    const hasChild = children.some((c: any) => c.student_id === childId);
+    if (!hasChild) throw new AppError('Accès non autorisé à cet enfant', 403);
+
+    // Récupérer la classe de l'enfant
+    const studentClasses = await getStudentClasses(childId);
+    if (studentClasses.length === 0) {
+      return res.json(successResponse([]));
+    }
+    const targetClassId = studentClasses[0].class_id;
+
+    const url = `${SUPABASE_URL}/rest/v1/schedule_slots?class_id=eq.${targetClassId}&is_active=eq.true&select=*,subjects:subject_id(name,color),teachers:teacher_id(profiles:profile_id(first_name,last_name))&order=day_of_week,start_time`;
+
+    const resData = await fetch(url, { headers: H });
+    const data = (await resData.json()) as any[];
+
+    if (!resData.ok) throw new AppError('Failed to fetch schedule', 500);
+
+    const formatted = (data || []).map((slot: any) => ({
+      ...slot,
+      subject_name: extractFirstItem(slot.subjects)?.name || slot.subject_name || 'Matière',
+      subject: extractFirstItem(slot.subjects),
+      teacher: extractFirstItem(slot.teachers)?.profiles,
+    }));
+
+    res.json(successResponse(formatted));
   } catch (err) { next(err); }
 });
 
@@ -153,8 +195,8 @@ router.get('/attendance', async (req, res, next) => {
 });
 
 // POST /api/v1/parent/attendance/:attendanceId/justify
-// Permet au parent de justifier une absence (status absent -> excused)
-router.post('/attendance/:attendanceId/justify', async (req, res, next) => {
+// Permet au parent de justifier une absence avec optionnellement un PDF
+router.post('/attendance/:attendanceId/justify', upload.single('justification_pdf'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { attendanceId } = req.params;
     const { reason } = req.body;
@@ -169,7 +211,12 @@ router.post('/attendance/:attendanceId/justify', async (req, res, next) => {
 
     if (!reason || !reason.trim()) throw new AppError('La raison de justification est requise', 400);
 
-    // 1. Récupérer l'enregistrement d'absence pour vérifier l'accès
+    // Vérifier que le fichier uploadé est bien un PDF si fourni
+    if (req.file && req.file.mimetype !== 'application/pdf') {
+      throw new AppError('Seuls les fichiers PDF sont acceptés', 400);
+    }
+
+    // 1. Récupérer l'enregistrement d'absence
     const resAtt = await fetch(
       `${SUPABASE_URL}/rest/v1/attendance?id=eq.${attendanceId}&select=id,student_id,status`,
       { headers: H }
@@ -182,18 +229,33 @@ router.post('/attendance/:attendanceId/justify', async (req, res, next) => {
       throw new AppError('Seules les absences ou retards peuvent être justifiés', 400);
     }
 
-    // 2. Vérifier que cet élève appartient au parent connecté
+    // 2. Vérifier accès parent
     const children = await getParentChildren(req.user!.id);
     const hasChild = children.some((c: any) => c.student_id === att.student_id);
     if (!hasChild) throw new AppError('Accès non autorisé', 403);
 
-    // 3. Mettre à jour l'enregistrement : status -> excused, reason -> motif
+    // 3. Upload PDF si fourni
+    let justificationUrl: string | null = null;
+    if (req.file) {
+      justificationUrl = await uploadFile(STORAGE_BUCKETS.DOCUMENTS, req.file, `justifications/${att.student_id}`);
+    }
+
+    // 4. Mettre à jour l'enregistrement
+    const updatePayload: any = {
+      status: 'excused',
+      reason: reason.trim(),
+      updated_at: new Date().toISOString(),
+    };
+    if (justificationUrl) {
+      updatePayload.justification_url = justificationUrl;
+    }
+
     const resUpdate = await fetch(
       `${SUPABASE_URL}/rest/v1/attendance?id=eq.${attendanceId}`,
       {
         method: 'PATCH',
         headers: H,
-        body: JSON.stringify({ status: 'excused', reason: reason.trim(), updated_at: new Date().toISOString() }),
+        body: JSON.stringify(updatePayload),
       }
     );
     const updated = (await resUpdate.json()) as any[];
