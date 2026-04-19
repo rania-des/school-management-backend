@@ -3,6 +3,7 @@ import { authenticate, authorize } from '../../middleware/auth.middleware';
 import { AppError } from '../../middleware/error.middleware';
 import { successResponse } from '../../utils/pagination';
 import { createNotification, createBulkNotifications, getClassStudentProfileIds } from '../../utils/notifications';
+import PDFDocument from 'pdfkit';
 
 const router = Router();
 
@@ -636,6 +637,161 @@ router.patch('/submissions/:submissionId/comment', async (req, res, next) => {
 // =============================================================================
 // PRÉSENCES (ATTENDANCE)
 // =============================================================================
+
+// ✅ IMPORTANT: Route GET /attendance/export-pdf DOIT être AVANT POST /attendance
+// =============================================================================
+// EXPORT PDF - FEUILLE D'APPEL
+// =============================================================================
+router.get('/attendance/export-pdf', async (req, res, next) => {
+  try {
+    const { classId, date } = req.query;
+
+    if (!classId || !date) {
+      throw new AppError('classId et date sont requis', 400);
+    }
+
+    // 1. Récupérer infos classe
+    const classRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/classes?id=eq.${classId}&select=name`,
+      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
+    );
+    const classData = (await classRes.json()) as any[];
+    const className = classData[0]?.name || `Classe ${classId}`;
+
+    // 2. Récupérer les élèves de la classe
+    const studentsRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/students?class_id=eq.${classId}&select=id,student_number,profiles:profile_id(first_name,last_name)`,
+      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
+    );
+    const students = (await studentsRes.json()) as any[];
+
+    // 3. Récupérer les présences existantes pour cette date
+    const attRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/attendance?class_id=eq.${classId}&date=eq.${date}&select=student_id,status`,
+      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
+    );
+    const attendances = (await attRes.json()) as any[];
+    const attMap = new Map(attendances.map((a: any) => [a.student_id, a.status]));
+
+    // 4. Générer le PDF
+    const doc = new PDFDocument({ margin: 40, size: 'A4' });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="appel_${className}_${date}.pdf"`
+    );
+    doc.pipe(res);
+
+    // En-tête
+    doc.fontSize(18).fillColor('#f59e0b').text('Feuille d\'Appel', { align: 'center' });
+    doc.moveDown(0.3);
+    doc.fontSize(13).fillColor('#1f2937').text(`Classe : ${className}`, { align: 'center' });
+    doc.fontSize(11).fillColor('#6b7280').text(`Date : ${new Date(date as string).toLocaleDateString('fr-FR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`, { align: 'center' });
+    doc.moveDown(0.5);
+
+    // Ligne séparatrice
+    doc.strokeColor('#f59e0b').lineWidth(2)
+      .moveTo(40, doc.y).lineTo(555, doc.y).stroke();
+    doc.moveDown(0.8);
+
+    // Légende des statuts
+    const statusLabels: Record<string, string> = {
+      present: 'Présent',
+      absent: 'Absent',
+      late: 'Retard',
+    };
+    const statusColors: Record<string, string> = {
+      present: '#16a34a',
+      absent:  '#dc2626',
+      late:    '#ea580c',
+    };
+
+    // Stats en-tête
+    const presentCount = [...attMap.values()].filter(v => v === 'present').length;
+    const absentCount  = [...attMap.values()].filter(v => v === 'absent').length;
+    const lateCount    = [...attMap.values()].filter(v => v === 'late').length;
+    const total        = students.length;
+
+    doc.fontSize(10).fillColor('#374151')
+      .text(`Total élèves : ${total}   |   Présents : ${presentCount}   |   Absents : ${absentCount}   |   Retards : ${lateCount}`, { align: 'center' });
+    doc.moveDown(0.8);
+
+    // En-tête tableau
+    const colX = { num: 45, name: 80, status: 400, sign: 480 };
+    const rowHeight = 28;
+    const startY = doc.y;
+
+    // Header row background
+    doc.rect(40, startY, 515, rowHeight).fill('#fef3c7');
+    doc.fontSize(10).fillColor('#92400e')
+      .text('#',           colX.num,    startY + 9, { width: 30 })
+      .text('Nom Prénom',  colX.name,   startY + 9, { width: 300 })
+      .text('Statut',      colX.status, startY + 9, { width: 70 })
+      .text('Signature',   colX.sign,   startY + 9, { width: 70 });
+
+    doc.strokeColor('#d1d5db').lineWidth(0.5)
+      .moveTo(40, startY + rowHeight).lineTo(555, startY + rowHeight).stroke();
+
+    // Lignes élèves
+    let y = startY + rowHeight;
+    students
+      .sort((a: any, b: any) => {
+        const lastA = a.profiles?.last_name || '';
+        const lastB = b.profiles?.last_name || '';
+        return lastA.localeCompare(lastB, 'fr');
+      })
+      .forEach((student: any, index: number) => {
+        // Nouvelle page si nécessaire
+        if (y + rowHeight > 800) {
+          doc.addPage();
+          y = 40;
+        }
+
+        const bg = index % 2 === 0 ? '#ffffff' : '#f9fafb';
+        doc.rect(40, y, 515, rowHeight).fill(bg);
+
+        const status = attMap.get(student.id) || null;
+        const profile = student.profiles;
+        const fullName = `${profile?.last_name || ''} ${profile?.first_name || ''}`.trim();
+
+        doc.fontSize(9).fillColor('#374151')
+          .text(String(index + 1),      colX.num,    y + 9, { width: 30 })
+          .text(fullName,               colX.name,   y + 9, { width: 300 })
+          .text(student.student_number ? `N°${student.student_number}` : '', colX.name, y + 18, { width: 300 });
+
+        if (status) {
+          doc.fontSize(9).fillColor(statusColors[status] || '#374151')
+            .text(statusLabels[status] || status, colX.status, y + 9, { width: 70 });
+        } else {
+          // Case vide pour signature si pas encore rempli
+          doc.strokeColor('#d1d5db').lineWidth(0.5)
+            .rect(colX.status, y + 6, 60, 16).stroke();
+        }
+
+        // Ligne signature (toujours vide pour signature manuscrite)
+        doc.strokeColor('#9ca3af').lineWidth(0.3)
+          .moveTo(colX.sign, y + rowHeight - 5)
+          .lineTo(colX.sign + 65, y + rowHeight - 5)
+          .stroke();
+
+        // Séparateur de ligne
+        doc.strokeColor('#e5e7eb').lineWidth(0.3)
+          .moveTo(40, y + rowHeight).lineTo(555, y + rowHeight).stroke();
+
+        y += rowHeight;
+      });
+
+    // Pied de page
+    doc.moveDown(1);
+    doc.fontSize(8).fillColor('#9ca3af')
+      .text(`Généré le ${new Date().toLocaleDateString('fr-FR')} à ${new Date().toLocaleTimeString('fr-FR')}`, { align: 'right' });
+
+    doc.end();
+  } catch (err) {
+    next(err);
+  }
+});
 
 router.post('/attendance', async (req, res, next) => {
   try {

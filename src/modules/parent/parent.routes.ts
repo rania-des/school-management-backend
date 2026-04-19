@@ -1,3 +1,4 @@
+import { supabaseAdmin } from '../../config/supabase';
 import { Router } from 'express';
 import { authenticate, authorize } from '../../middleware/auth.middleware';
 import { AppError } from '../../middleware/error.middleware';
@@ -75,12 +76,11 @@ async function getParentChildren(profileId: string): Promise<any[]> {
   }).filter((item: any) => item.student_id);
 }
 
-// Helper pour récupérer les classes d'un étudiant (CORRIGÉ - utilise students directement)
+// Helper pour récupérer les classes d'un étudiant
 async function getStudentClasses(studentId: string): Promise<any[]> {
   const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
   const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
 
-  // La table est "students" avec un champ class_id direct (pas de table class_students)
   const res = await fetch(
     `${SUPABASE_URL}/rest/v1/students?id=eq.${studentId}&select=id,class_id,classes:class_id(id,name,academic_year_id)`,
     { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
@@ -89,7 +89,6 @@ async function getStudentClasses(studentId: string): Promise<any[]> {
   const data = await res.json() as any[];
   if (!res.ok) throw new AppError('Failed to fetch student classes', 500);
 
-  // Retourne un tableau avec le même format attendu par les consommateurs
   return (data || [])
     .filter((s: any) => s.class_id)
     .map((s: any) => ({
@@ -97,6 +96,48 @@ async function getStudentClasses(studentId: string): Promise<any[]> {
       class: extractFirstItem(s.classes),
     }));
 }
+
+// =============================================================================
+// PROFESSEURS (pour les parents)
+// =============================================================================
+
+// GET /api/v1/parent/teachers — liste des professeurs pour les parents
+router.get('/teachers', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
+    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
+
+    // Récupérer tous les professeurs avec leurs profils
+    const { data: teachers } = await supabaseAdmin
+      .from('teachers')
+      .select(`
+        id,
+        profile_id,
+        profiles:profile_id (
+          id,
+          first_name,
+          last_name,
+          email
+        )
+      `);
+
+    if (!teachers) return res.json(successResponse([]));
+
+    // Formater les données
+    const formatted = teachers.map((teacher: any) => ({
+      id: teacher.id,
+      profile_id: teacher.profile_id,
+      first_name: teacher.profiles?.first_name || '',
+      last_name: teacher.profiles?.last_name || '',
+      email: teacher.profiles?.email || '',
+    }));
+
+    return res.json(successResponse(formatted));
+  } catch (err) {
+    return next(err);
+  }
+});
 
 // =============================================================================
 // ENFANTS (CHILDREN)
@@ -743,6 +784,69 @@ router.patch('/profile', async (req, res, next) => {
     
     res.json(successResponse(data, 'Profil mis à jour'));
   } catch (err) { next(err); }
+});
+
+// =============================================================================
+// RÉCUPÉRATION ID PARENT
+// =============================================================================
+
+// GET /api/v1/parent/my-id — récupère l'ID de la table parents
+router.get('/my-id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { data: parent, error } = await supabaseAdmin
+      .from('parents')
+      .select('id')
+      .eq('profile_id', req.user!.id)
+      .single();
+    
+    if (error || !parent) throw new AppError('Parent not found', 404);
+    return res.json(successResponse(parent));
+  } catch (err) {
+    return next(err);
+  }
+})
+// GET /parent/student-parent/:studentId - récupère le parent d'un étudiant
+router.get('/student-parent/:studentId', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { studentId } = req.params;
+    
+    const { data: link } = await supabaseAdmin
+      .from('parent_student')
+      .select('parent_id')
+      .eq('student_id', studentId)
+      .single();
+    
+    if (!link) throw new AppError('Aucun parent trouvé pour cet étudiant', 404);
+    
+    return res.json(successResponse({ parent_id: link.parent_id }));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// GET /parent/profile-by-id/:parentId - récupère le profil d'un parent par son ID
+router.get('/profile-by-id/:parentId', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { parentId } = req.params;
+    
+    const { data: parent } = await supabaseAdmin
+      .from('parents')
+      .select('profile_id')
+      .eq('id', parentId)
+      .single();
+    
+    if (!parent) throw new AppError('Parent not found', 404);
+    
+    const { data: profile } = await supabaseAdmin
+      .from('profiles')
+      .select('first_name, last_name, email')
+      .eq('id', parent.profile_id)
+      .single();
+    
+    return res.json(successResponse(profile));
+  } catch (err) {
+    return next(err);
+  }
 });
 
 export default router;
