@@ -408,7 +408,7 @@ router.get('/my-courses', async (req, res, next) => {
     if (!student?.class_id) throw new AppError('No class assigned', 404);
 
     const [slotsRes, coursesRes] = await Promise.all([
-      sbGet(`schedule_slots?class_id=eq.${student.class_id}&is_active=eq.true&select=subject_id,subjects(id,name)`),
+      sbGet(`schedule_slots?class_id=eq.${student.class_id}&is_active=eq.true&select=subject_id,subjects(id,name),teachers(id,profile_id,profiles(first_name,last_name))`),
       sbGet(`assignments?class_id=eq.${student.class_id}&type=eq.course&select=*,subjects(id,name)&order=created_at.desc`),
     ]);
 
