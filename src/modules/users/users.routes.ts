@@ -3,7 +3,7 @@ import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { authenticate, authorize } from '../../middleware/auth.middleware';
 import { AppError } from '../../middleware/error.middleware';
-import { getPagination, paginate, successResponse } from '../../utils/pagination';
+import { successResponse } from '../../utils/pagination';
 
 const router = Router();
 router.use(authenticate);
@@ -228,42 +228,113 @@ router.patch('/:id/role', authorize('admin'), async (req: Request, res: Response
   } catch (err) { return next(err); }
 });
 
-// ✅ CORRIGÉ: GET /users avec les données de classe
+// ✅ CORRIGÉ: GET /users avec pagination inline (sans getPagination)
 router.get('/', authorize('admin', 'teacher'), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { page, limit, offset } = getPagination(req);
-    const { role, search } = req.query;
+    // Fix: s'assurer que req.query existe toujours
+    const query = req.query || {};
+    const page   = Math.max(1, parseInt(query.page as string) || 1);
+    const limit  = Math.min(100, parseInt(query.limit as string) || 20);
+    const offset = (page - 1) * limit;
+    
+    const role   = query.role as string | undefined;
+    const search = query.search as string | undefined;
 
+    // Cas teacher : requête directe sur la table teachers (optimisé)
+    if (role === 'teacher') {
+      let teachersUrl = `teachers?select=id,profile_id,specialization,employee_number,hire_date,profiles(id,first_name,last_name,email,avatar_url,role,is_active)&order=profile_id.desc&offset=${offset}&limit=${limit}`;
+      
+      if (search) {
+        teachersUrl += `&or=(profiles.first_name.ilike.*${search}*,profiles.last_name.ilike.*${search}*,profiles.email.ilike.*${search}*)`;
+      }
+      
+      const { data: teachers } = await sbGet(teachersUrl);
+      const arr = Array.isArray(teachers) ? teachers : [];
+      
+      // Compter le total
+      let countUrl = `teachers?select=id&profile_id=not.is.null`;
+      if (search) {
+        countUrl += `&or=(profiles.first_name.ilike.*${search}*,profiles.last_name.ilike.*${search}*,profiles.email.ilike.*${search}*)`;
+      }
+      const { data: countData } = await sbGet(countUrl);
+      const total = Array.isArray(countData) ? countData.length : arr.length;
+      
+      // Formater les données pour correspondre à l'interface attendue
+      const formatted = arr.map((t: any) => ({
+        id: t.profile_id,
+        first_name: t.profiles?.first_name || '',
+        last_name: t.profiles?.last_name || '',
+        email: t.profiles?.email || '',
+        avatar_url: t.profiles?.avatar_url || null,
+        role: 'teacher',
+        is_active: t.profiles?.is_active ?? true,
+        roleData: {
+          id: t.id,
+          specialization: t.specialization,
+          employee_number: t.employee_number,
+          hire_date: t.hire_date,
+        },
+        relations: [],
+      }));
+      
+      return res.json({
+        data: formatted,
+        meta: { 
+          page, 
+          limit, 
+          total, 
+          totalPages: Math.ceil(total / limit),
+          hasNext: page * limit < total,
+          hasPrev: page > 1
+        }
+      });
+    }
+
+    // Autres rôles (students, parents, admin)
     let url = `profiles?select=*&order=created_at.desc&offset=${offset}&limit=${limit}`;
-
     if (role) {
       url += `&role=eq.${role}`;
     } else if (req.user!.role === 'teacher') {
       url += `&role=eq.student`;
     }
-
     if (search) {
       url += `&or=(first_name.ilike.*${search}*,last_name.ilike.*${search}*,email.ilike.*${search}*)`;
     }
 
     const { data } = await sbGet(url);
     const arr = Array.isArray(data) ? data : [];
+    
+    // Compter le total
+    let countUrl = `profiles?select=id`;
+    if (role) {
+      countUrl += `&role=eq.${role}`;
+    } else if (req.user!.role === 'teacher') {
+      countUrl += `&role=eq.student`;
+    }
+    if (search) {
+      countUrl += `&or=(first_name.ilike.*${search}*,last_name.ilike.*${search}*,email.ilike.*${search}*)`;
+    }
+    const { data: countData } = await sbGet(countUrl);
+    const total = Array.isArray(countData) ? countData.length : arr.length;
 
-    // ✅ Enrichir chaque user avec roleData (contenant la classe)
+    // Enrichissement léger pour les non-teachers
     const enriched = await Promise.all(arr.map(async (user: any) => {
       const roleData = await getRoleData(user.id, user.role);
-      
-      let relations = [];
-      if (user.role === 'student') {
-        relations = await getStudentParents(user.id);
-      } else if (user.role === 'parent') {
-        relations = await getParentChildren(user.id);
-      }
-      
-      return { ...user, roleData, relations };
+      return { ...user, roleData, relations: [] };
     }));
 
-    return res.json(paginate(enriched, enriched.length, { page, limit, offset }));
+    return res.json({
+      data: enriched,
+      meta: { 
+        page, 
+        limit, 
+        total, 
+        totalPages: Math.ceil(total / limit),
+        hasNext: page * limit < total,
+        hasPrev: page > 1
+      }
+    });
+
   } catch (err) { return next(err); }
 });
 
