@@ -1,22 +1,24 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.markAllNotificationsAsRead = exports.markNotificationAsRead = exports.getStudentParentProfileIds = exports.getClassAllProfileIds = exports.getClassStudentProfileIds = exports.createBulkNotifications = exports.createNotification = void 0;
-const supabase_1 = require("../config/supabase");
+const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
+const HEADERS = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' };
 const createNotification = async (params) => {
     try {
-        const { error } = await supabase_1.supabaseAdmin.from('notifications').insert({
-            user_id: params.recipientId,
-            type: params.type,
-            title: params.title,
-            body: params.body || '',
-            data: params.data || {},
-            is_read: false,
-            created_at: new Date().toISOString(),
+        await fetch(`${SUPABASE_URL}/rest/v1/notifications`, {
+            method: 'POST',
+            headers: HEADERS,
+            body: JSON.stringify({
+                user_id: params.recipientId,
+                type: params.type,
+                title: params.title,
+                body: params.body || '',
+                data: params.data || {},
+                is_read: false,
+                created_at: new Date().toISOString(),
+            })
         });
-        if (error) {
-            console.error('Failed to create notification:', error);
-            return null;
-        }
         return { success: true };
     }
     catch (error) {
@@ -38,11 +40,11 @@ const createBulkNotifications = async (recipientIds, params) => {
             is_read: false,
             created_at: new Date().toISOString(),
         }));
-        const { error } = await supabase_1.supabaseAdmin.from('notifications').insert(notifications);
-        if (error) {
-            console.error('Failed to create bulk notifications:', error);
-            return { success: false, error, count: 0 };
-        }
+        await fetch(`${SUPABASE_URL}/rest/v1/notifications`, {
+            method: 'POST',
+            headers: HEADERS,
+            body: JSON.stringify(notifications)
+        });
         return { success: true, count: recipientIds.length };
     }
     catch (error) {
@@ -53,10 +55,8 @@ const createBulkNotifications = async (recipientIds, params) => {
 exports.createBulkNotifications = createBulkNotifications;
 const getClassStudentProfileIds = async (classId) => {
     try {
-        const { data } = await supabase_1.supabaseAdmin
-            .from('students')
-            .select('profile_id')
-            .eq('class_id', classId);
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/students?class_id=eq.${classId}&select=profile_id`, { headers: HEADERS });
+        const data = await res.json();
         return (data || []).map((s) => s.profile_id).filter(Boolean);
     }
     catch (error) {
@@ -65,94 +65,52 @@ const getClassStudentProfileIds = async (classId) => {
     }
 };
 exports.getClassStudentProfileIds = getClassStudentProfileIds;
-// Récupère tous les profile_ids d'une classe (élèves uniquement, version améliorée)
 const getClassAllProfileIds = async (classId) => {
     try {
-        // Récupérer les élèves
-        const { data: students } = await supabase_1.supabaseAdmin
-            .from('students')
-            .select('profile_id')
-            .eq('class_id', classId);
-        const studentIds = (students || []).map((s) => s.profile_id).filter(Boolean);
-        // Récupérer les enseignants de cette classe via schedule_slots
-        const { data: slots } = await supabase_1.supabaseAdmin
-            .from('schedule_slots')
-            .select('teacher_id')
-            .eq('class_id', classId)
-            .eq('is_active', true);
-        const teacherIds = [];
-        for (const slot of (slots || [])) {
-            if (slot.teacher_id) {
-                const { data: teacher } = await supabase_1.supabaseAdmin
-                    .from('teachers')
-                    .select('profile_id')
-                    .eq('id', slot.teacher_id)
-                    .single();
-                if (teacher?.profile_id) {
-                    teacherIds.push(teacher.profile_id);
-                }
-            }
-        }
-        return [...new Set([...studentIds, ...teacherIds])];
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/students?class_id=eq.${classId}&select=profile_id`, { headers: HEADERS });
+        const data = await res.json();
+        return (data || []).map((s) => s.profile_id).filter(Boolean);
     }
     catch (error) {
-        console.error('Error getting class all profile IDs:', error);
         return [];
     }
 };
 exports.getClassAllProfileIds = getClassAllProfileIds;
 const getStudentParentProfileIds = async (studentId) => {
     try {
-        const { data } = await supabase_1.supabaseAdmin
-            .from('parent_student')
-            .select('parents(profile_id)')
-            .eq('student_id', studentId);
-        return (data || [])
-            .map((ps) => ps.parents?.profile_id)
-            .filter(Boolean);
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/parent_student?student_id=eq.${studentId}&select=parent_id`, { headers: HEADERS });
+        const data = await res.json();
+        return (data || []).map((ps) => ps.parent_id).filter(Boolean);
     }
     catch (error) {
-        console.error('Error getting student parent profile IDs:', error);
         return [];
     }
 };
 exports.getStudentParentProfileIds = getStudentParentProfileIds;
-// Marquer une notification comme lue
 const markNotificationAsRead = async (notificationId, userId) => {
     try {
-        const { error } = await supabase_1.supabaseAdmin
-            .from('notifications')
-            .update({ is_read: true })
-            .eq('id', notificationId)
-            .eq('user_id', userId);
-        if (error) {
-            console.error('Failed to mark notification as read:', error);
-            return false;
-        }
+        await fetch(`${SUPABASE_URL}/rest/v1/notifications?id=eq.${notificationId}&user_id=eq.${userId}`, {
+            method: 'PATCH',
+            headers: HEADERS,
+            body: JSON.stringify({ is_read: true })
+        });
         return true;
     }
     catch (error) {
-        console.error('Mark read error:', error);
         return false;
     }
 };
 exports.markNotificationAsRead = markNotificationAsRead;
-// Marquer toutes les notifications d'un utilisateur comme lues
 const markAllNotificationsAsRead = async (userId) => {
     try {
-        const { error } = await supabase_1.supabaseAdmin
-            .from('notifications')
-            .update({ is_read: true })
-            .eq('user_id', userId)
-            .eq('is_read', false);
-        if (error) {
-            console.error('Failed to mark all notifications as read:', error);
-            return false;
-        }
+        await fetch(`${SUPABASE_URL}/rest/v1/notifications?user_id=eq.${userId}&is_read=eq.false`, {
+            method: 'PATCH',
+            headers: HEADERS,
+            body: JSON.stringify({ is_read: true })
+        });
         return true;
     }
     catch (error) {
-        console.error('Mark all read error:', error);
         return false;
     }
 };

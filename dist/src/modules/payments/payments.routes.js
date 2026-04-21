@@ -1,20 +1,45 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const zod_1 = require("zod");
-const supabase_1 = require("../../config/supabase");
 const auth_middleware_1 = require("../../middleware/auth.middleware");
 const error_middleware_1 = require("../../middleware/error.middleware");
 const pagination_1 = require("../../utils/pagination");
-const notifications_1 = require("../../utils/notifications");
-const multer_1 = __importDefault(require("multer"));
-const storage_1 = require("../../utils/storage");
 const router = (0, express_1.Router)();
 router.use(auth_middleware_1.authenticate);
-const upload = (0, multer_1.default)({ storage: multer_1.default.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
+const H = {
+    'apikey': SUPABASE_KEY,
+    'Authorization': `Bearer ${SUPABASE_KEY}`,
+    'Content-Type': 'application/json',
+};
+async function sbGet(path) {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { headers: H });
+    return { data: await res.json(), ok: res.ok };
+}
+async function sbPost(path, body) {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+        method: 'POST',
+        headers: { ...H, 'Prefer': 'return=representation' },
+        body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    return { data: Array.isArray(data) ? data[0] : data, ok: res.ok };
+}
+async function sbPatch(path, body) {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+        method: 'PATCH',
+        headers: { ...H, 'Prefer': 'return=representation' },
+        body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    return { data: Array.isArray(data) ? data[0] : data, ok: res.ok };
+}
+async function sbDelete(path) {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { method: 'DELETE', headers: H });
+    return { ok: res.ok };
+}
 const paymentSchema = zod_1.z.object({
     studentId: zod_1.z.string().uuid(),
     type: zod_1.z.enum(['tuition', 'canteen', 'trip', 'activity', 'other']),
@@ -28,67 +53,59 @@ router.get('/', async (req, res, next) => {
     try {
         const { page, limit, offset } = (0, pagination_1.getPagination)(req);
         const { status, type } = req.query;
-        let query = supabase_1.supabaseAdmin
-            .from('payments')
-            .select(`
-        *,
-        students(student_number, profiles(first_name, last_name))
-      `, { count: 'exact' })
-            .order('created_at', { ascending: false })
-            .range(offset, offset + limit - 1);
+        let url = `payments?select=*&order=created_at.desc&offset=${offset}&limit=${limit}`;
         if (req.user.role === 'student') {
-            const { data: student } = await supabase_1.supabaseAdmin
-                .from('students').select('id').eq('profile_id', req.user.id).single();
-            query = query.eq('student_id', student?.id);
+            const { data: students } = await sbGet(`students?profile_id=eq.${req.user.id}&select=id`);
+            const sid = Array.isArray(students) ? students[0]?.id : null;
+            if (sid)
+                url += `&student_id=eq.${sid}`;
+            else
+                return res.json((0, pagination_1.paginate)([], 0, { page, limit, offset }));
         }
         else if (req.user.role === 'parent') {
-            const { data: parent } = await supabase_1.supabaseAdmin
-                .from('parents').select('id').eq('profile_id', req.user.id).single();
-            const { data: children } = await supabase_1.supabaseAdmin
-                .from('parent_student').select('student_id').eq('parent_id', parent?.id);
-            const childIds = (children || []).map((c) => c.student_id);
-            if (childIds.length > 0)
-                query = query.in('student_id', childIds);
+            const { data: parents } = await sbGet(`parents?profile_id=eq.${req.user.id}&select=id`);
+            const parentId = Array.isArray(parents) ? parents[0]?.id : null;
+            if (parentId) {
+                const { data: links } = await sbGet(`parent_student?parent_id=eq.${parentId}&select=student_id`);
+                const childIds = (Array.isArray(links) ? links : []).map((c) => c.student_id).filter(Boolean);
+                if (childIds.length > 0)
+                    url += `&student_id=in.(${childIds.join(',')})`;
+                else
+                    return res.json((0, pagination_1.paginate)([], 0, { page, limit, offset }));
+            }
         }
         if (status)
-            query = query.eq('status', status);
+            url += `&status=eq.${status}`;
         if (type)
-            query = query.eq('type', type);
-        const { data, count, error } = await query;
-        if (error)
-            throw new error_middleware_1.AppError('Failed to fetch payments', 500);
-        return res.json((0, pagination_1.paginate)(data || [], count || 0, { page, limit, offset }));
+            url += `&type=eq.${type}`;
+        const { data } = await sbGet(url);
+        const arr = Array.isArray(data) ? data : [];
+        return res.json((0, pagination_1.paginate)(arr, arr.length, { page, limit, offset }));
     }
     catch (err) {
         return next(err);
     }
 });
-// GET /payments/stats - financial summary
+// GET /payments/stats
 router.get('/stats', (0, auth_middleware_1.authorize)('admin'), async (req, res, next) => {
     try {
         const { academicYearId } = req.query;
-        let query = supabase_1.supabaseAdmin.from('payments').select('amount, status, type');
+        let url = `payments?select=amount,status,type`;
         if (academicYearId)
-            query = query.eq('academic_year_id', academicYearId);
-        const { data, error } = await query;
-        if (error)
-            throw new error_middleware_1.AppError('Failed to fetch stats', 500);
-        const stats = {
-            total: 0,
-            paid: 0,
-            pending: 0,
-            overdue: 0,
-            byType: {},
-        };
-        (data || []).forEach((p) => {
-            stats.total += parseFloat(p.amount);
+            url += `&academic_year_id=eq.${academicYearId}`;
+        const { data } = await sbGet(url);
+        const arr = Array.isArray(data) ? data : [];
+        const stats = { total: 0, paid: 0, pending: 0, overdue: 0, byType: {} };
+        arr.forEach((p) => {
+            const amt = parseFloat(p.amount) || 0;
+            stats.total += amt;
             if (p.status === 'paid')
-                stats.paid += parseFloat(p.amount);
+                stats.paid += amt;
             if (p.status === 'pending')
-                stats.pending += parseFloat(p.amount);
+                stats.pending += amt;
             if (p.status === 'overdue')
-                stats.overdue += parseFloat(p.amount);
-            stats.byType[p.type] = (stats.byType[p.type] || 0) + parseFloat(p.amount);
+                stats.overdue += amt;
+            stats.byType[p.type] = (stats.byType[p.type] || 0) + amt;
         });
         return res.json((0, pagination_1.successResponse)(stats));
     }
@@ -96,72 +113,36 @@ router.get('/stats', (0, auth_middleware_1.authorize)('admin'), async (req, res,
         return next(err);
     }
 });
-// POST /payments - admin creates
+// POST /payments
 router.post('/', (0, auth_middleware_1.authorize)('admin'), async (req, res, next) => {
     try {
         const body = paymentSchema.parse(req.body);
-        const { data, error } = await supabase_1.supabaseAdmin
-            .from('payments')
-            .insert({
+        const { data, ok } = await sbPost('payments', {
             student_id: body.studentId,
             type: body.type,
             amount: body.amount,
-            description: body.description,
-            due_date: body.dueDate,
-            academic_year_id: body.academicYearId,
+            description: body.description || null,
+            due_date: body.dueDate || null,
+            academic_year_id: body.academicYearId || null,
             status: 'pending',
-        })
-            .select('*, students(profile_id)')
-            .single();
-        if (error || !data)
+        });
+        if (!ok || !data)
             throw new error_middleware_1.AppError('Failed to create payment', 500);
-        // Notify student and parents
-        const studentProfileId = data.students?.profile_id;
-        if (studentProfileId) {
-            await (0, notifications_1.createNotification)({
-                recipientId: studentProfileId,
-                type: 'payment',
-                title: 'Nouveau paiement',
-                body: `${body.description || body.type}: ${body.amount} TND${body.dueDate ? ` - Échéance: ${body.dueDate}` : ''}`,
-                data: { paymentId: data.id },
-            });
-        }
         return res.status(201).json((0, pagination_1.successResponse)(data));
     }
     catch (err) {
         return next(err);
     }
 });
-// PATCH /payments/:id/mark-paid - admin marks as paid + uploads receipt
-router.patch('/:id/mark-paid', (0, auth_middleware_1.authorize)('admin'), upload.single('receipt'), async (req, res, next) => {
+// PATCH /payments/:id/mark-paid
+router.patch('/:id/mark-paid', (0, auth_middleware_1.authorize)('admin'), async (req, res, next) => {
     try {
-        let receiptUrl;
-        if (req.file) {
-            receiptUrl = await (0, storage_1.uploadFile)(storage_1.STORAGE_BUCKETS.RECEIPTS, req.file, req.params.id);
-        }
-        const { data, error } = await supabase_1.supabaseAdmin
-            .from('payments')
-            .update({
+        const { data, ok } = await sbPatch(`payments?id=eq.${req.params.id}`, {
             status: 'paid',
             paid_at: new Date().toISOString(),
-            receipt_url: receiptUrl,
-        })
-            .eq('id', req.params.id)
-            .select('*, students(profile_id)')
-            .single();
-        if (error || !data)
+        });
+        if (!ok || !data)
             throw new error_middleware_1.AppError('Payment not found', 404);
-        // Notify student
-        const studentProfileId = data.students?.profile_id;
-        if (studentProfileId) {
-            await (0, notifications_1.createNotification)({
-                recipientId: studentProfileId,
-                type: 'payment',
-                title: 'Paiement confirmé',
-                body: 'Votre paiement a été confirmé. Le reçu est disponible.',
-                data: { paymentId: data.id, receiptUrl },
-            });
-        }
         return res.json((0, pagination_1.successResponse)(data));
     }
     catch (err) {
@@ -174,9 +155,8 @@ router.patch('/:id/status', (0, auth_middleware_1.authorize)('admin'), async (re
         const { status } = zod_1.z.object({
             status: zod_1.z.enum(['pending', 'paid', 'overdue', 'cancelled']),
         }).parse(req.body);
-        const { data, error } = await supabase_1.supabaseAdmin
-            .from('payments').update({ status }).eq('id', req.params.id).select().single();
-        if (error || !data)
+        const { data, ok } = await sbPatch(`payments?id=eq.${req.params.id}`, { status });
+        if (!ok || !data)
             throw new error_middleware_1.AppError('Payment not found', 404);
         return res.json((0, pagination_1.successResponse)(data));
     }
@@ -187,7 +167,7 @@ router.patch('/:id/status', (0, auth_middleware_1.authorize)('admin'), async (re
 // DELETE /payments/:id
 router.delete('/:id', (0, auth_middleware_1.authorize)('admin'), async (req, res, next) => {
     try {
-        await supabase_1.supabaseAdmin.from('payments').delete().eq('id', req.params.id);
+        await sbDelete(`payments?id=eq.${req.params.id}`);
         return res.status(204).send();
     }
     catch (err) {

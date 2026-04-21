@@ -36,7 +36,7 @@ router.get('/', async (req, res, next) => {
         *,
         subjects(name, code, color),
         classes(name),
-        teachers(users(first_name, last_name))
+        teachers(profiles(first_name, last_name))
       `, { count: 'exact' })
             .order('created_at', { ascending: false })
             .range(offset, offset + limit - 1);
@@ -81,7 +81,7 @@ router.get('/:id', async (req, res, next) => {
     try {
         const { data, error } = await supabase_1.supabaseAdmin
             .from('assignments')
-            .select(`*, subjects(name), classes(name), teachers(users(first_name, last_name))`)
+            .select(`*, subjects(name), classes(name), teachers(profiles(first_name, last_name))`)
             .eq('id', req.params.id)
             .single();
         if (error || !data)
@@ -178,7 +178,7 @@ router.get('/:id/submissions', async (req, res, next) => {
     try {
         let query = supabase_1.supabaseAdmin
             .from('submissions')
-            .select(`*, students(student_number, users(first_name, last_name))`)
+            .select(`*, students(student_number, profiles(first_name, last_name))`)
             .eq('assignment_id', req.params.id);
         if (req.user.role === 'student') {
             const { data: student } = await supabase_1.supabaseAdmin

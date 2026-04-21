@@ -77,7 +77,8 @@ class AuthController {
     }
     async getMe(req, res, next) {
         try {
-            const result = await auth_service_1.authService.getMe(req.user.id);
+            // Pass the access token so getMe can fetch profile with user's own JWT
+            const result = await auth_service_1.authService.getMe(req.user.id, req.accessToken);
             return res.json(result);
         }
         catch (err) {

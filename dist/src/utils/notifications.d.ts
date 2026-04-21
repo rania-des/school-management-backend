@@ -1,4 +1,4 @@
-export type NotificationType = 'grade' | 'assignment' | 'absence' | 'message' | 'announcement' | 'payment' | 'meeting' | 'general';
+export type NotificationType = 'grade' | 'assignment' | 'absence' | 'message' | 'announcement' | 'payment' | 'meeting' | 'general' | 'course';
 export interface CreateNotificationParams {
     recipientId: string;
     type: NotificationType;

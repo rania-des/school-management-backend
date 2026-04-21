@@ -20,8 +20,8 @@ export declare const registerSchema: z.ZodObject<{
     dateOfBirth: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
     email: string;
-    password: string;
     role: "student" | "teacher" | "parent" | "admin";
+    password: string;
     firstName: string;
     lastName: string;
     phone?: string | undefined;
@@ -29,8 +29,8 @@ export declare const registerSchema: z.ZodObject<{
     dateOfBirth?: string | undefined;
 }, {
     email: string;
-    password: string;
     role: "student" | "teacher" | "parent" | "admin";
+    password: string;
     firstName: string;
     lastName: string;
     phone?: string | undefined;

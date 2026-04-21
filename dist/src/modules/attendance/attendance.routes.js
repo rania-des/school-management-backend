@@ -1,13 +1,20 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const zod_1 = require("zod");
+const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const supabase_1 = require("../../config/supabase");
 const auth_middleware_1 = require("../../middleware/auth.middleware");
 const error_middleware_1 = require("../../middleware/error.middleware");
 const pagination_1 = require("../../utils/pagination");
 const router = (0, express_1.Router)();
 router.use(auth_middleware_1.authenticate);
+// ─── Secret pour signer les tokens QR ────────────────────────────────────────
+// Ajoutez QR_JWT_SECRET dans votre .env  (ex: QR_JWT_SECRET=un_secret_solide_ici)
+const QR_SECRET = process.env.QR_JWT_SECRET || 'qr_fallback_secret_change_me';
 const attendanceSchema = zod_1.z.object({
     studentId: zod_1.z.string().uuid(),
     classId: zod_1.z.string().uuid(),
@@ -71,12 +78,146 @@ router.get('/students/:classId', (0, auth_middleware_1.authorize)('teacher', 'ad
         id,
         profile_id,
         student_number,
-        users:profile_id(first_name, last_name, email)
+        profiles:profile_id(first_name, last_name, email)
       `)
             .eq('class_id', classId);
         if (error)
             throw new error_middleware_1.AppError('Failed to fetch students', 500);
         return res.json((0, pagination_1.successResponse)(students || []));
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+// ============================================
+// 🆕  QR CODE — GESTION DE PRÉSENCE
+// ============================================
+/**
+ * POST /attendance/qr-session
+ * Enseignant : génère un token JWT signé valable 5 min.
+ * Body: { classId, subjectId, date }
+ * Retourne: { token, qrPayload, expiresAt }
+ */
+router.post('/qr-session', (0, auth_middleware_1.authorize)('teacher', 'admin'), async (req, res, next) => {
+    try {
+        const { classId, subjectId, date } = zod_1.z
+            .object({
+            classId: zod_1.z.string().uuid(),
+            subjectId: zod_1.z.string().uuid().optional(),
+            date: zod_1.z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Format date invalide (YYYY-MM-DD)'),
+        })
+            .parse(req.body);
+        // Récupérer l'id enseignant
+        const { data: teacher } = await supabase_1.supabaseAdmin
+            .from('teachers')
+            .select('id')
+            .eq('profile_id', req.user.id)
+            .single();
+        if (!teacher)
+            throw new error_middleware_1.AppError('Teacher not found', 404);
+        const expiresIn = 5 * 60; // 5 minutes en secondes
+        const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
+        // Payload signé
+        const payload = {
+            type: 'qr_attendance',
+            classId,
+            subjectId: subjectId ?? null,
+            teacherId: teacher.id,
+            date,
+            iat: Math.floor(Date.now() / 1000),
+        };
+        const token = jsonwebtoken_1.default.sign(payload, QR_SECRET, { expiresIn });
+        return res.status(201).json((0, pagination_1.successResponse)({ token, expiresAt }, 'QR session créée — valide 5 minutes'));
+    }
+    catch (err) {
+        return next(err);
+    }
+});
+/**
+ * POST /attendance/scan
+ * Élève : valide le token QR et enregistre sa présence.
+ * Body: { token }
+ * Retourne: { attendance record }
+ */
+router.post('/scan', (0, auth_middleware_1.authorize)('student'), async (req, res, next) => {
+    try {
+        const { token } = zod_1.z
+            .object({ token: zod_1.z.string().min(10, 'Token invalide') })
+            .parse(req.body);
+        // Vérifier et décoder le token QR
+        let decoded;
+        try {
+            decoded = jsonwebtoken_1.default.verify(token, QR_SECRET);
+        }
+        catch (e) {
+            if (e.name === 'TokenExpiredError') {
+                throw new error_middleware_1.AppError('QR code expiré. Demandez à l\'enseignant d\'en générer un nouveau.', 410);
+            }
+            throw new error_middleware_1.AppError('QR code invalide.', 400);
+        }
+        if (decoded.type !== 'qr_attendance') {
+            throw new error_middleware_1.AppError('QR code invalide.', 400);
+        }
+        const { classId, teacherId, date } = decoded;
+        // Récupérer l'id étudiant
+        const { data: student } = await supabase_1.supabaseAdmin
+            .from('students')
+            .select('id, class_id')
+            .eq('profile_id', req.user.id)
+            .single();
+        if (!student)
+            throw new error_middleware_1.AppError('Élève introuvable', 404);
+        // Vérifier que l'élève appartient bien à la classe
+        if (student.class_id !== classId) {
+            throw new error_middleware_1.AppError('Vous n\'appartenez pas à cette classe.', 403);
+        }
+        // Upsert présence (évite les doublons) - Version manuelle sans onConflict
+        // Vérifier si une entrée existe déjà
+        const { data: existing } = await supabase_1.supabaseAdmin
+            .from('attendance')
+            .select('id')
+            .eq('student_id', student.id)
+            .eq('class_id', classId)
+            .eq('date', date)
+            .maybeSingle();
+        let data;
+        let error;
+        if (existing) {
+            // Mettre à jour
+            const res = await supabase_1.supabaseAdmin
+                .from('attendance')
+                .update({ status: 'present', reason: 'QR scan', updated_at: new Date().toISOString() })
+                .eq('id', existing.id)
+                .select()
+                .single();
+            data = res.data;
+            error = res.error;
+        }
+        else {
+            // Insérer
+            const record = {
+                student_id: student.id,
+                class_id: classId,
+                teacher_id: teacherId,
+                date,
+                status: 'present',
+                reason: 'QR scan',
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+            };
+            const res = await supabase_1.supabaseAdmin
+                .from('attendance')
+                .insert(record)
+                .select()
+                .single();
+            data = res.data;
+            error = res.error;
+        }
+        if (error) {
+            console.error('QR SCAN ERROR:', error);
+            throw new error_middleware_1.AppError('Erreur lors de l\'enregistrement de la présence.', 500);
+        }
+        return res.status(201).json((0, pagination_1.successResponse)(data, 'Présence enregistrée ✅'));
     }
     catch (err) {
         return next(err);
@@ -91,7 +232,7 @@ router.get('/', async (req, res, next) => {
         const { classId, studentId, date, startDate, endDate, limit = 100 } = req.query;
         let query = supabase_1.supabaseAdmin
             .from('attendance')
-            .select('*, students(*, users(first_name, last_name)), classes(*), teachers(*)')
+            .select('*, students(id, student_number, profile_id, profiles(first_name, last_name)), classes(*), teachers(*)')
             .order('date', { ascending: false })
             .limit(Number(limit));
         if (classId)
@@ -131,8 +272,10 @@ router.get('/', async (req, res, next) => {
             }
         }
         const { data, error } = await query;
-        if (error)
-            throw new error_middleware_1.AppError('Failed to fetch attendance', 500);
+        if (error) {
+            console.error('ATTENDANCE ERROR:', JSON.stringify(error, null, 2));
+            throw new error_middleware_1.AppError(`Failed to fetch attendance: ${error.message}`, 500);
+        }
         return res.json((0, pagination_1.successResponse)(data || []));
     }
     catch (err) {
@@ -165,8 +308,10 @@ router.post('/bulk', (0, auth_middleware_1.authorize)('teacher', 'admin'), async
             .from('attendance')
             .upsert(records, { onConflict: 'student_id,class_id,date' })
             .select();
-        if (error)
+        if (error) {
+            console.error('ATTENDANCE UPSERT ERROR:', JSON.stringify(error, null, 2));
             throw new error_middleware_1.AppError(`Failed to save attendance: ${error.message}`, 500);
+        }
         return res.status(201).json((0, pagination_1.successResponse)(data, `${data?.length} attendance records saved`));
     }
     catch (err) {
@@ -193,8 +338,10 @@ router.get('/stats/:studentId', (0, auth_middleware_1.authorize)('teacher', 'adm
             query = query.gte('date', startDate.toISOString().split('T')[0]);
         }
         const { data, error } = await query;
-        if (error)
+        if (error) {
+            console.error('ATTENDANCE STATS ERROR:', JSON.stringify(error, null, 2));
             throw new error_middleware_1.AppError('Failed to fetch attendance stats', 500);
+        }
         const stats = {
             present: (data || []).filter((a) => a.status === 'present').length,
             absent: (data || []).filter((a) => a.status === 'absent').length,
@@ -215,37 +362,11 @@ router.delete('/:id', (0, auth_middleware_1.authorize)('teacher', 'admin'), asyn
             .from('attendance')
             .delete()
             .eq('id', id);
-        if (error)
+        if (error) {
+            console.error('ATTENDANCE DELETE ERROR:', JSON.stringify(error, null, 2));
             throw new error_middleware_1.AppError('Failed to delete attendance record', 500);
+        }
         return res.status(204).send();
-    }
-    catch (err) {
-        return next(err);
-    }
-});
-// GET /attendance/students/:classId - Récupérer les élèves d'une classe
-router.get('/students/:classId', (0, auth_middleware_1.authorize)('teacher', 'admin'), async (req, res, next) => {
-    try {
-        const { classId } = req.params;
-        const { data: students, error } = await supabase_1.supabaseAdmin
-            .from('students')
-            .select(`
-        id,
-        profile_id,
-        student_number,
-        users:profile_id(first_name, last_name, email)
-      `)
-            .eq('class_id', classId);
-        if (error)
-            throw new error_middleware_1.AppError('Failed to fetch students', 500);
-        // Formater la réponse
-        const formattedStudents = (students || []).map((s) => ({
-            id: s.id,
-            profile_id: s.profile_id,
-            student_number: s.student_number,
-            users: s.users && Array.isArray(s.users) ? s.users[0] : s.users
-        }));
-        return res.json((0, pagination_1.successResponse)(formattedStudents || []));
     }
     catch (err) {
         return next(err);

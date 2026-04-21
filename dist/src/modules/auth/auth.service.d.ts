@@ -6,10 +6,10 @@ export declare class AuthService {
         user: {
             id: string;
             email: string | undefined;
-            role: any;
-            firstName: any;
-            lastName: any;
-            avatarUrl: any;
+            role: string;
+            firstName: string;
+            lastName: string;
+            avatarUrl: string;
         };
     }>;
     register(payload: {
@@ -43,17 +43,17 @@ export declare class AuthService {
     updatePassword(userId: string, newPassword: string): Promise<{
         message: string;
     }>;
-    getMe(userId: string): Promise<{
-        id: any;
-        email: any;
-        role: any;
-        firstName: any;
-        lastName: any;
-        gender: any;
-        phone: any;
-        address: any;
-        avatarUrl: any;
-        dateOfBirth: any;
+    getMe(userId: string, accessToken: string): Promise<{
+        id: string;
+        email: string;
+        role: string;
+        firstName: string;
+        lastName: string;
+        gender: string;
+        phone: string;
+        address: string;
+        avatarUrl: string;
+        dateOfBirth: string;
         roleId: any;
         roleData: any;
     }>;
