@@ -4,6 +4,11 @@ import { supabaseAdmin } from '../../config/supabase';
 import { AppError } from '../../middleware/error.middleware';
 import { successResponse } from '../../utils/pagination';
 import multer from 'multer';
+import { exec } from 'child_process';
+import { writeFileSync, unlinkSync, existsSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { randomUUID } from 'crypto';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } }); // 20MB
@@ -31,6 +36,59 @@ async function sbPatch(path: string, body: any) {
   const data = await res.json() as any[];
   return { data: Array.isArray(data) ? data[0] : data, ok: res.ok };
 }
+
+// ─── POST /student/speech-to-text ─────────────────────────────────────────────
+router.post('/speech-to-text', upload.single('audio'), async (req, res, next) => {
+  try {
+    if (!req.file) throw new AppError('No audio file provided', 400);
+
+    const lang     = (req.body.language as string) || 'fr';
+    const tmpId    = randomUUID();
+    const inPath   = join(tmpdir(), `${tmpId}.webm`);
+    const outPath  = join(tmpdir(), `${tmpId}.wav`);
+
+    // Write uploaded blob to disk
+    writeFileSync(inPath, req.file.buffer);
+
+    // Convert webm → wav via ffmpeg (required by Whisper)
+    await new Promise<void>((resolve, reject) => {
+      exec(`ffmpeg -y -i "${inPath}" -ar 16000 -ac 1 "${outPath}"`, (err) => {
+        if (err) reject(new AppError('ffmpeg conversion failed. Is ffmpeg installed?', 500));
+        else resolve();
+      });
+    });
+
+    // Call Whisper CLI
+    const whisperModel = process.env.WHISPER_MODEL || 'base';
+    const transcription = await new Promise<string>((resolve, reject) => {
+      exec(
+        `whisper "${outPath}" --model ${whisperModel} --language ${lang} --output_format txt --output_dir "${tmpdir()}"`,
+        (err, stdout, stderr) => {
+          if (err) {
+            reject(new AppError('Whisper failed. Run: pip install openai-whisper', 500));
+          } else {
+            // Whisper writes <filename>.txt next to the wav
+            const txtPath = outPath.replace('.wav', '.txt');
+            try {
+              const text = require('fs').readFileSync(txtPath, 'utf-8').trim();
+              if (existsSync(txtPath)) unlinkSync(txtPath);
+              resolve(text);
+            } catch {
+              resolve(stdout.trim() || '');
+            }
+          }
+        }
+      );
+    });
+
+    // Cleanup temp files
+    if (existsSync(inPath)) unlinkSync(inPath);
+    if (existsSync(outPath)) unlinkSync(outPath);
+
+    return res.json({ transcription });
+
+  } catch (err) { return next(err); }
+});
 
 // ─── GET /student/my-profile ──────────────────────────────────────────────────
 router.get('/my-profile', async (req, res, next) => {

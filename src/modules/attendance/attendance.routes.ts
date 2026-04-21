@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
+import jwt from 'jsonwebtoken';
 import { supabaseAdmin } from '../../config/supabase';
 import { authenticate, authorize } from '../../middleware/auth.middleware';
 import { AppError } from '../../middleware/error.middleware';
@@ -8,6 +9,10 @@ import { successResponse } from '../../utils/pagination';
 
 const router = Router();
 router.use(authenticate);
+
+// ─── Secret pour signer les tokens QR ────────────────────────────────────────
+// Ajoutez QR_JWT_SECRET dans votre .env  (ex: QR_JWT_SECRET=un_secret_solide_ici)
+const QR_SECRET = process.env.QR_JWT_SECRET || 'qr_fallback_secret_change_me';
 
 const attendanceSchema = z.object({
   studentId: z.string().uuid(),
@@ -91,6 +96,164 @@ router.get('/students/:classId', authorize('teacher', 'admin'), async (req: Requ
 });
 
 // ============================================
+// 🆕  QR CODE — GESTION DE PRÉSENCE
+// ============================================
+
+/**
+ * POST /attendance/qr-session
+ * Enseignant : génère un token JWT signé valable 5 min.
+ * Body: { classId, subjectId, date }
+ * Retourne: { token, qrPayload, expiresAt }
+ */
+router.post(
+  '/qr-session',
+  authorize('teacher', 'admin'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { classId, subjectId, date } = z
+        .object({
+          classId:   z.string().uuid(),
+          subjectId: z.string().uuid().optional(),
+          date:      z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Format date invalide (YYYY-MM-DD)'),
+        })
+        .parse(req.body);
+
+      // Récupérer l'id enseignant
+      const { data: teacher } = await supabaseAdmin
+        .from('teachers')
+        .select('id')
+        .eq('profile_id', req.user!.id)
+        .single();
+
+      if (!teacher) throw new AppError('Teacher not found', 404);
+
+      const expiresIn = 5 * 60; // 5 minutes en secondes
+      const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
+
+      // Payload signé
+      const payload = {
+        type:      'qr_attendance',
+        classId,
+        subjectId: subjectId ?? null,
+        teacherId: teacher.id,
+        date,
+        iat:       Math.floor(Date.now() / 1000),
+      };
+
+      const token = jwt.sign(payload, QR_SECRET, { expiresIn });
+
+      return res.status(201).json(
+        successResponse({ token, expiresAt }, 'QR session créée — valide 5 minutes')
+      );
+    } catch (err) {
+      return next(err);
+    }
+  }
+);
+
+/**
+ * POST /attendance/scan
+ * Élève : valide le token QR et enregistre sa présence.
+ * Body: { token }
+ * Retourne: { attendance record }
+ */
+router.post(
+  '/scan',
+  authorize('student'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { token } = z
+        .object({ token: z.string().min(10, 'Token invalide') })
+        .parse(req.body);
+
+      // Vérifier et décoder le token QR
+      let decoded: any;
+      try {
+        decoded = jwt.verify(token, QR_SECRET);
+      } catch (e: any) {
+        if (e.name === 'TokenExpiredError') {
+          throw new AppError('QR code expiré. Demandez à l\'enseignant d\'en générer un nouveau.', 410);
+        }
+        throw new AppError('QR code invalide.', 400);
+      }
+
+      if (decoded.type !== 'qr_attendance') {
+        throw new AppError('QR code invalide.', 400);
+      }
+
+      const { classId, teacherId, date } = decoded;
+
+      // Récupérer l'id étudiant
+      const { data: student } = await supabaseAdmin
+        .from('students')
+        .select('id, class_id')
+        .eq('profile_id', req.user!.id)
+        .single();
+
+      if (!student) throw new AppError('Élève introuvable', 404);
+
+      // Vérifier que l'élève appartient bien à la classe
+      if (student.class_id !== classId) {
+        throw new AppError('Vous n\'appartenez pas à cette classe.', 403);
+      }
+
+      // Upsert présence (évite les doublons) - Version manuelle sans onConflict
+      // Vérifier si une entrée existe déjà
+      const { data: existing } = await supabaseAdmin
+        .from('attendance')
+        .select('id')
+        .eq('student_id', student.id)
+        .eq('class_id', classId)
+        .eq('date', date)
+        .maybeSingle();
+
+      let data: any;
+      let error: any;
+
+      if (existing) {
+        // Mettre à jour
+        const res = await supabaseAdmin
+          .from('attendance')
+          .update({ status: 'present', reason: 'QR scan', updated_at: new Date().toISOString() })
+          .eq('id', existing.id)
+          .select()
+          .single();
+        data = res.data;
+        error = res.error;
+      } else {
+        // Insérer
+        const record = {
+          student_id: student.id,
+          class_id:   classId,
+          teacher_id: teacherId,
+          date,
+          status:     'present' as const,
+          reason:     'QR scan',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+        const res = await supabaseAdmin
+          .from('attendance')
+          .insert(record)
+          .select()
+          .single();
+        data = res.data;
+        error = res.error;
+      }
+
+      if (error) {
+        console.error('QR SCAN ERROR:', error);
+        throw new AppError('Erreur lors de l\'enregistrement de la présence.', 500);
+      }
+
+      return res.status(201).json(successResponse(data, 'Présence enregistrée ✅'));
+    } catch (err) {
+      return next(err);
+    }
+  }
+);
+
+// ============================================
 // ROUTES GÉNÉRALES
 // ============================================
 
@@ -98,18 +261,18 @@ router.get('/students/:classId', authorize('teacher', 'admin'), async (req: Requ
 router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { classId, studentId, date, startDate, endDate, limit = 100 } = req.query;
-    
+
     let query = supabaseAdmin
       .from('attendance')
       .select('*, students(id, student_number, profile_id, profiles(first_name, last_name)), classes(*), teachers(*)')
       .order('date', { ascending: false })
       .limit(Number(limit));
 
-    if (classId) query = query.eq('class_id', classId);
-    if (studentId) query = query.eq('student_id', studentId);
-    if (date) query = query.eq('date', date);
-    if (startDate) query = query.gte('date', startDate);
-    if (endDate) query = query.lte('date', endDate);
+    if (classId)    query = query.eq('class_id', classId);
+    if (studentId)  query = query.eq('student_id', studentId);
+    if (date)       query = query.eq('date', date);
+    if (startDate)  query = query.gte('date', startDate);
+    if (endDate)    query = query.lte('date', endDate);
 
     // Filtrer par rôle
     if (req.user!.role === 'student') {
@@ -161,15 +324,15 @@ router.post('/bulk', authorize('teacher', 'admin'), async (req: Request, res: Re
       .single();
 
     const records = attendances.map((a) => ({
-      student_id: a.studentId,
-      class_id: a.classId,
+      student_id:       a.studentId,
+      class_id:         a.classId,
       schedule_slot_id: a.scheduleSlotId || null,
-      teacher_id: teacher?.id || null,
-      date: a.date,
-      status: a.status,
-      reason: a.reason || null,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+      teacher_id:       teacher?.id || null,
+      date:             a.date,
+      status:           a.status,
+      reason:           a.reason || null,
+      created_at:       new Date().toISOString(),
+      updated_at:       new Date().toISOString(),
     }));
 
     const { data, error } = await supabaseAdmin
@@ -201,9 +364,9 @@ router.get('/stats/:studentId', authorize('teacher', 'admin', 'parent'), async (
 
     if (period) {
       const startDate = new Date();
-      if (period === 'week') startDate.setDate(startDate.getDate() - 7);
+      if (period === 'week')  startDate.setDate(startDate.getDate() - 7);
       else if (period === 'month') startDate.setMonth(startDate.getMonth() - 1);
-      else if (period === 'year') startDate.setFullYear(startDate.getFullYear() - 1);
+      else if (period === 'year')  startDate.setFullYear(startDate.getFullYear() - 1);
       query = query.gte('date', startDate.toISOString().split('T')[0]);
     }
 
@@ -215,9 +378,9 @@ router.get('/stats/:studentId', authorize('teacher', 'admin', 'parent'), async (
 
     const stats = {
       present: (data || []).filter((a: any) => a.status === 'present').length,
-      absent: (data || []).filter((a: any) => a.status === 'absent').length,
-      late: (data || []).filter((a: any) => a.status === 'late').length,
-      total: (data || []).length,
+      absent:  (data || []).filter((a: any) => a.status === 'absent').length,
+      late:    (data || []).filter((a: any) => a.status === 'late').length,
+      total:   (data || []).length,
     };
 
     return res.json(successResponse(stats));
@@ -230,7 +393,7 @@ router.get('/stats/:studentId', authorize('teacher', 'admin', 'parent'), async (
 router.delete('/:id', authorize('teacher', 'admin'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
-    
+
     const { error } = await supabaseAdmin
       .from('attendance')
       .delete()
@@ -240,7 +403,7 @@ router.delete('/:id', authorize('teacher', 'admin'), async (req: Request, res: R
       console.error('ATTENDANCE DELETE ERROR:', JSON.stringify(error, null, 2));
       throw new AppError('Failed to delete attendance record', 500);
     }
-    
+
     return res.status(204).send();
   } catch (err) {
     return next(err);

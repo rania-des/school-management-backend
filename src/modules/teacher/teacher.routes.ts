@@ -1183,4 +1183,46 @@ router.get('/download-file', async (req, res, next) => {
   }
 });
 
+// =============================================================================
+// QR CODE — PRÉSENCE AUTOMATIQUE
+// =============================================================================
+
+const QR_SECRET = process.env.QR_JWT_SECRET || 'qr_fallback_secret_change_me';
+
+/**
+ * POST /teacher/attendance/qr-session
+ * Génère un token JWT signé valable 5 min pour le scan QR élève.
+ * Body: { classId, subjectId?, date }
+ */
+router.post('/attendance/qr-session', async (req, res, next) => {
+  try {
+    const jwt = await import('jsonwebtoken');
+    const { classId, subjectId, date } = req.body as { classId: string; subjectId?: string; date: string };
+
+    if (!classId || !date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      throw new AppError('classId et date (YYYY-MM-DD) sont requis', 400);
+    }
+
+    const teacherId = await getTeacherId(req.user!.id);
+
+    const expiresIn = 5 * 60; // 5 min
+    const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
+
+    const payload = {
+      type:      'qr_attendance',
+      classId,
+      subjectId: subjectId ?? null,
+      teacherId,
+      date,
+    };
+
+    const token = jwt.default.sign(payload, QR_SECRET, { expiresIn });
+
+    res.status(201).json(successResponse({ token, expiresAt }, 'QR session créée — valide 5 minutes'));
+  } catch (err) {
+    next(err);
+  }
+});
+
+
 export default router;

@@ -3,7 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
-
+import pdfRoutes from './modules/pdf/pdf.routes';
 dotenv.config();
 
 import { globalRateLimit, authRateLimit } from './middleware/rateLimit.middleware';
@@ -28,6 +28,8 @@ import usersRoutes        from './modules/users/users.routes';
 import analyticsRoutes    from './modules/analytics/analytics.routes';
 import dbRoutes           from './routes/db.routes';
 import downloadRoutes     from './modules/student/download.routes';
+// ✅ NEW — AI prediction module
+import aiRoutes           from './modules/ai/ai.routes';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -100,9 +102,11 @@ app.use(`${API}/meetings`,      meetingsRoutes);
 app.use(`${API}/users`,         usersRoutes);
 app.use(`${API}/analytics`,     analyticsRoutes);
 app.use(`${API}/db`,            dbRoutes);
-
+app.use(`${API}/pdf`,           pdfRoutes);
+// ✅ NEW — AI routes (predict, evaluate)
+app.use(`${API}/ai`,            aiRoutes);
 // ✅ Route de téléchargement sécurisé pour les fichiers des étudiants
-app.use(`${API}/student`, downloadRoutes);
+app.use(`${API}/student`,       downloadRoutes);
 
 app.get(`${API}/ping`, (_req, res) => {
   res.json({ message: 'pong', timestamp: new Date().toISOString() });
