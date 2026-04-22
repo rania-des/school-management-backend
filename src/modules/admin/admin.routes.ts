@@ -67,7 +67,19 @@ router.get('/users/:id', authorize('admin'), async (req: Request, res: Response,
     if (profile.role === 'student') {
       const { data: student } = await supabaseAdmin
         .from('students')
-        .select('*, class:classes(*)')
+        .select(`
+          *,
+          class:classes(*),
+          parent_student(
+            id,
+            is_primary,
+            parents(
+              id,
+              profile_id,
+              profiles:profile_id(first_name, last_name, email)
+            )
+          )
+        `)
         .eq('profile_id', id)
         .single();
       extraData = student;
@@ -79,10 +91,28 @@ router.get('/users/:id', authorize('admin'), async (req: Request, res: Response,
         .single();
       extraData = teacher;
     } else if (profile.role === 'parent') {
-      const { data: children } = await supabaseAdmin
+      // Trouver l'id réel dans la table parents via profile_id
+      const { data: parentRow } = await supabaseAdmin
+        .from('parents')
+        .select('id')
+        .eq('profile_id', id)
+        .maybeSingle();
+
+      const { data: children } = parentRow ? await supabaseAdmin
         .from('parent_student')
-        .select('student:students(*, class:classes(*))')
-        .eq('parent_id', id);
+        .select(`
+          id,
+          is_primary,
+          student:students(
+            id,
+            student_number,
+            profile_id,
+            class:classes(name),
+            profiles:profile_id(first_name, last_name, email)
+          )
+        `)
+        .eq('parent_id', parentRow.id) : { data: [] };
+
       extraData = { children: children || [] };
     }
 
@@ -488,7 +518,6 @@ router.post('/academic-years', authorize('admin'), async (req: Request, res: Res
       throw new AppError('Name, start_date and end_date are required', 400);
     }
 
-    // If is_current is true, set all others to false
     if (is_current) {
       await supabaseAdmin.from('academic_years').update({ is_current: false }).neq('id', '');
     }
@@ -519,7 +548,6 @@ router.patch('/academic-years/:id', authorize('admin'), async (req: Request, res
     if (end_date !== undefined) updates.end_date = end_date;
     if (is_current !== undefined) updates.is_current = is_current;
 
-    // If setting is_current to true, set all others to false
     if (is_current === true) {
       await supabaseAdmin.from('academic_years').update({ is_current: false }).neq('id', id);
     }
@@ -696,6 +724,79 @@ router.get('/parent-student', authorize('admin'), async (req: Request, res: Resp
   }
 });
 
+// ✅ POST /admin/parent-student — Lier un parent à un élève (CORRIGÉ - parent ET student)
+router.post('/parent-student', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { parent_id, student_id } = req.body;
+
+    if (!parent_id || !student_id) {
+      throw new AppError('parent_id and student_id are required', 400);
+    }
+
+    // parent_id reçu = profile_id du user, il faut trouver l'id réel dans la table parents
+    let { data: parentRow } = await supabaseAdmin
+      .from('parents')
+      .select('id')
+      .eq('profile_id', parent_id)
+      .maybeSingle();
+
+    if (!parentRow) {
+      const { data: newParent, error: insertParentErr } = await supabaseAdmin
+        .from('parents')
+        .insert({ profile_id: parent_id })
+        .select('id')
+        .single();
+      
+      if (insertParentErr) throw new AppError('Failed to create parent record', 500);
+      parentRow = newParent;
+    }
+
+    const realParentId = parentRow!.id;
+
+    // student_id reçu = profile_id du student, il faut trouver l'id réel dans students
+    const { data: studentRow } = await supabaseAdmin
+      .from('students')
+      .select('id')
+      .eq('profile_id', student_id)
+      .maybeSingle();
+
+    if (!studentRow) {
+      throw new AppError('Student not found', 404);
+    }
+
+    const realStudentId = studentRow.id;
+
+    // Vérifier si le lien existe déjà
+    const { data: existing } = await supabaseAdmin
+      .from('parent_student')
+      .select('id')
+      .eq('parent_id', realParentId)
+      .eq('student_id', realStudentId)
+      .maybeSingle();
+
+    if (existing) {
+      throw new AppError('Ce lien parent-élève existe déjà', 409);
+    }
+
+    // Créer le lien
+    const { data, error } = await supabaseAdmin
+      .from('parent_student')
+      .insert({ parent_id: realParentId, student_id: realStudentId })
+      .select(`
+        *,
+        parent:parents(profile_id, profiles:profile_id(first_name, last_name)),
+        student:students(id, student_number, profiles:profile_id(first_name, last_name), class:classes(name))
+      `)
+      .single();
+
+    if (error) throw new AppError('Failed to create parent-student link', 500);
+
+    return res.status(201).json(successResponse(data, 'Lien parent-élève créé avec succès'));
+  } catch (err) {
+    return next(err);
+  }
+});
+
 // DELETE /admin/parent-student/:id
 router.delete('/parent-student/:id', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -749,7 +850,6 @@ router.get('/students-with-class', authorize('admin'), async (req: Request, res:
 
     if (error) throw new AppError('Failed to fetch students', 500);
 
-    // Fetch profiles pour avoir les noms
     const profileIds = (data || []).map((s: any) => s.profile_id).filter(Boolean);
     const { data: profiles } = profileIds.length
       ? await supabaseAdmin.from('profiles').select('id, first_name, last_name').in('id', profileIds)

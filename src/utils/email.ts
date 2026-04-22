@@ -190,5 +190,198 @@ export const sendLoginVerificationEmail = async (email: string, code: string) =>
   );
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ✅ NOUVEAU — Rapport hebdomadaire parent (généré par l'IA)
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface ChildNarrative {
+  studentName: string;
+  narrative: string;
+  data: {
+    grades: Array<{ score: number; max_score: number; title: string; subjects: { name: string } | null }>;
+    absences: Array<{ status: string; date: string }>;
+    assignments: Array<{ title: string; due_date: string; submitted: boolean; subjects: { name: string } | null }>;
+  };
+}
+
+const subjectLabels: Record<string, Record<string, string>> = {
+  fr: { grades: 'Notes', absences: 'Absences / Retards', assignments: 'Devoirs', submitted: 'Rendu', pending: 'À rendre', absent: 'Absent', late: 'En retard' },
+  en: { grades: 'Grades', absences: 'Absences / Late', assignments: 'Assignments', submitted: 'Submitted', pending: 'Pending', absent: 'Absent', late: 'Late' },
+  ar: { grades: 'الدرجات', absences: 'الغياب / التأخر', assignments: 'الواجبات', submitted: 'مُسلَّم', pending: 'لم يُسلَّم', absent: 'غائب', late: 'متأخر' },
+};
+
+function buildChildSection(child: ChildNarrative, lang: 'fr' | 'ar' | 'en', i: number): string {
+  const l = subjectLabels[lang] || subjectLabels.fr;
+  const { grades, absences, assignments } = child.data;
+
+  const gradesRows = grades.length
+    ? grades
+        .map(
+          (g) =>
+            `<tr>
+              <td style="padding:6px 10px;border-bottom:1px solid #F3F4F6;">${g.subjects?.name ?? '—'}</td>
+              <td style="padding:6px 10px;border-bottom:1px solid #F3F4F6;">${g.title}</td>
+              <td style="padding:6px 10px;border-bottom:1px solid #F3F4F6;text-align:center;font-weight:bold;color:${
+                (g.score / (g.max_score || 20)) * 20 >= 10 ? '#16A34A' : '#DC2626'
+              };">${g.score}/${g.max_score ?? 20}</td>
+            </tr>`
+        )
+        .join('')
+    : `<tr><td colspan="3" style="padding:8px 10px;color:#9CA3AF;font-style:italic;">—</td></tr>`;
+
+  const absenceRows = absences.length
+    ? absences
+        .map(
+          (a) =>
+            `<tr>
+              <td style="padding:6px 10px;border-bottom:1px solid #F3F4F6;">${a.date}</td>
+              <td style="padding:6px 10px;border-bottom:1px solid #F3F4F6;color:${a.status === 'absent' ? '#DC2626' : '#F59E0B'};">${
+                l[a.status as 'absent' | 'late'] ?? a.status
+              }</td>
+            </tr>`
+        )
+        .join('')
+    : `<tr><td colspan="2" style="padding:8px 10px;color:#9CA3AF;font-style:italic;">—</td></tr>`;
+
+  const assignmentRows = assignments.length
+    ? assignments
+        .map(
+          (a) =>
+            `<tr>
+              <td style="padding:6px 10px;border-bottom:1px solid #F3F4F6;">${a.subjects?.name ?? '—'}</td>
+              <td style="padding:6px 10px;border-bottom:1px solid #F3F4F6;">${a.title}</td>
+              <td style="padding:6px 10px;border-bottom:1px solid #F3F4F6;text-align:center;">${
+                a.submitted
+                  ? `<span style="color:#16A34A;">✅ ${l.submitted}</span>`
+                  : `<span style="color:#DC2626;">❌ ${l.pending}</span>`
+              }</td>
+              <td style="padding:6px 10px;border-bottom:1px solid #F3F4F6;color:#6B7280;">${a.due_date}</td>
+            </tr>`
+        )
+        .join('')
+    : `<tr><td colspan="4" style="padding:8px 10px;color:#9CA3AF;font-style:italic;">—</td></tr>`;
+
+  // Narrative paragraphs (preserve line breaks)
+  const narrativeHtml = child.narrative
+    .split('\n')
+    .filter((l) => l.trim())
+    .map((p) => `<p style="margin:0 0 12px;line-height:1.65;">${p}</p>`)
+    .join('');
+
+  return `
+    <div style="background:#F9FAFB;border-radius:12px;padding:20px 24px;margin-bottom:28px;${i > 0 ? 'margin-top:12px;' : ''}">
+      <h3 style="margin:0 0 16px;font-size:18px;color:#1E3A5F;border-bottom:2px solid #3B82F6;padding-bottom:8px;">
+        🎒 ${child.studentName}
+      </h3>
+
+      <!-- Narrative IA -->
+      <div style="background:white;border-left:4px solid #3B82F6;padding:16px 20px;border-radius:0 8px 8px 0;margin-bottom:20px;color:#374151;font-size:14px;">
+        ${narrativeHtml}
+      </div>
+
+      <!-- Notes -->
+      <h4 style="margin:0 0 8px;font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:#6B7280;">📊 ${l.grades}</h4>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:16px;">
+        <thead><tr style="background:#EFF6FF;">
+          <th style="padding:8px 10px;text-align:left;color:#1E3A5F;">Matière</th>
+          <th style="padding:8px 10px;text-align:left;color:#1E3A5F;">Titre</th>
+          <th style="padding:8px 10px;text-align:center;color:#1E3A5F;">Note</th>
+        </tr></thead>
+        <tbody>${gradesRows}</tbody>
+      </table>
+
+      <!-- Absences -->
+      <h4 style="margin:0 0 8px;font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:#6B7280;">🔴 ${l.absences}</h4>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:16px;">
+        <thead><tr style="background:#FEF2F2;">
+          <th style="padding:8px 10px;text-align:left;color:#991B1B;">Date</th>
+          <th style="padding:8px 10px;text-align:left;color:#991B1B;">Statut</th>
+        </tr></thead>
+        <tbody>${absenceRows}</tbody>
+      </table>
+
+      <!-- Devoirs -->
+      <h4 style="margin:0 0 8px;font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:#6B7280;">📝 ${l.assignments}</h4>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead><tr style="background:#F0FDF4;">
+          <th style="padding:8px 10px;text-align:left;color:#166534;">Matière</th>
+          <th style="padding:8px 10px;text-align:left;color:#166534;">Titre</th>
+          <th style="padding:8px 10px;text-align:center;color:#166534;">Rendu</th>
+          <th style="padding:8px 10px;text-align:left;color:#166534;">Échéance</th>
+        </tr></thead>
+        <tbody>${assignmentRows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+export const sendWeeklyParentReport = async (
+  email: string,
+  parentName: string,
+  children: ChildNarrative[],
+  weekStart: string,
+  weekEnd: string,
+  language: 'fr' | 'ar' | 'en' = 'fr'
+) => {
+  const subjects: Record<'fr' | 'ar' | 'en', { subject: string; greeting: string; footer: string; portal: string }> = {
+    fr: {
+      subject: `Rapport scolaire hebdomadaire — semaine du ${weekStart}`,
+      greeting: `Bonjour ${parentName},`,
+      footer: `Bonne semaine à vous et à votre famille !`,
+      portal: 'Accéder au portail',
+    },
+    en: {
+      subject: `Weekly School Report — week of ${weekStart}`,
+      greeting: `Hello ${parentName},`,
+      footer: `Have a great week!`,
+      portal: 'Access Portal',
+    },
+    ar: {
+      subject: `التقرير الأسبوعي المدرسي — أسبوع ${weekStart}`,
+      greeting: `مرحباً ${parentName}،`,
+      footer: `نتمنى لكم وعائلتكم أسبوعاً رائعاً!`,
+      portal: 'الوصول إلى البوابة',
+    },
+  };
+
+  const t = subjects[language] || subjects.fr;
+  const dir = language === 'ar' ? 'rtl' : 'ltr';
+
+  const childrenSections = children
+    .map((c, i) => buildChildSection(c, language, i))
+    .join('');
+
+  const html = `
+    <div style="font-family:Arial,sans-serif;max-width:680px;margin:0 auto;color:#1F2937;" dir="${dir}">
+      <!-- Header -->
+      <div style="background:linear-gradient(135deg,#1E3A5F 0%,#2563EB 100%);padding:32px 36px;border-radius:12px 12px 0 0;text-align:center;">
+        <h1 style="margin:0;color:white;font-size:22px;font-weight:700;">🏫 ${APP_NAME}</h1>
+        <p style="margin:8px 0 0;color:#BFDBFE;font-size:14px;">${weekStart} → ${weekEnd}</p>
+      </div>
+
+      <!-- Body -->
+      <div style="background:white;padding:28px 36px;border:1px solid #E5E7EB;border-top:none;border-radius:0 0 12px 12px;">
+        <p style="font-size:15px;margin:0 0 20px;">${t.greeting}</p>
+
+        ${childrenSections}
+
+        <!-- CTA -->
+        <div style="text-align:center;margin-top:24px;">
+          <a href="${FRONTEND_URL}/dashboard"
+             style="background:#2563EB;color:white;padding:12px 32px;border-radius:8px;text-decoration:none;display:inline-block;font-size:14px;font-weight:600;">
+            ${t.portal}
+          </a>
+        </div>
+
+        <p style="margin:24px 0 0;color:#6B7280;font-size:13px;text-align:center;">${t.footer}</p>
+        <hr style="margin:20px 0;border-color:#E5E7EB;">
+        <p style="color:#9CA3AF;font-size:11px;text-align:center;">© ${new Date().getFullYear()} ${APP_NAME}. Tous droits réservés.</p>
+      </div>
+    </div>
+  `;
+
+  return sendEmail(email, `[${APP_NAME}] ${t.subject}`, html);
+};
+
 // Export du transporteur pour utilisation avancée
 export const getTransporter = () => initTransporter();
