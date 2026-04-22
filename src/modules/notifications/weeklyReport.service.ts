@@ -1,7 +1,7 @@
 // src/modules/notifications/weeklyReport.service.ts
 // ─────────────────────────────────────────────────────────────────────────────
 // Cron hebdomadaire (dimanche 20h00) → génère un email narratif IA par parent
-// Utilise : node-cron  |  utils/email.ts  |  Anthropic claude-sonnet-4-20250514
+// Utilise : node-cron  |  utils/email.ts  |  Ollama (mistral)
 // ─────────────────────────────────────────────────────────────────────────────
 
 import cron from 'node-cron';
@@ -61,7 +61,7 @@ interface StudentWeekData {
   assignments: AssignmentRow[];
 }
 
-// ── Appel LLM (Anthropic API) ─────────────────────────────────────────────────
+// ── Appel LLM (Ollama - mistral) ──────────────────────────────────────────────
 
 async function generateNarrative(
   parentName: string,
@@ -148,50 +148,39 @@ ${assignmentsSummary}
 اكتب نصاً متدفقاً من 3-4 فقرات. ابدأ بملخص إيجابي، ثم تناول نقاط الاهتمام إن وجدت، وانتهِ بتشجيع. اكتب نص الجسم فقط بدون سطر الموضوع أو الخاتمة.`,
   };
 
-  const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-  if (!ANTHROPIC_API_KEY) {
-    console.warn('⚠️ ANTHROPIC_API_KEY not set — returning placeholder narrative.');
-    return language === 'fr'
-      ? `Bonjour ${parentName},\n\nVoici le résumé de la semaine de ${studentName}.\n\nNotes : ${gradesSummary}\nAbsences : ${absencesSummary}\nDevoirs : ${assignmentsSummary}\n\nBonne semaine !`
-      : `Dear ${parentName},\n\nHere is ${studentName}'s weekly summary.\n\nGrades: ${gradesSummary}\nAbsences: ${absencesSummary}\nAssignments: ${assignmentsSummary}\n\nHave a great week!`;
-  }
+  const OLLAMA_URL = process.env.OLLAMA_URL ?? 'http://localhost:11434';
+  const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? 'mistral';
 
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    console.log(`🤖 [WeeklyReport] Génération narrative via Ollama (${OLLAMA_MODEL})...`);
+
+    const response = await fetch(`${OLLAMA_URL}/api/generate`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 800,
-        messages: [{ role: 'user', content: prompts[language] }],
+        model: OLLAMA_MODEL,
+        prompt: prompts[language],
+        stream: false,
       }),
     });
 
     if (!response.ok) {
       const err = await response.text();
-      console.error('❌ Anthropic API error:', err);
-      throw new Error(`Anthropic HTTP ${response.status}`);
+      console.error('❌ Ollama API error:', err);
+      throw new Error(`Ollama HTTP ${response.status}`);
     }
 
-    const data = (await response.json()) as {
-      content: Array<{ type: string; text: string }>;
-    };
+    const data = (await response.json()) as { response: string };
 
-    return (
-      data.content
-        .filter((b) => b.type === 'text')
-        .map((b) => b.text)
-        .join('\n') || 'Résumé indisponible.'
-    );
+    return data.response?.trim() || 'Résumé indisponible.';
   } catch (error) {
     console.error('❌ LLM narrative generation failed:', error);
+    // Fallback texte simple si Ollama ne répond pas
     return language === 'fr'
-      ? `Bonjour ${parentName},\n\nVoici le résumé de la semaine de ${studentName}.\n\nNotes : ${gradesSummary}\nAbsences : ${absencesSummary}\nDevoirs : ${assignmentsSummary}`
-      : `Dear ${parentName},\n\nHere is ${studentName}'s weekly summary.\n\nGrades: ${gradesSummary}\nAbsences: ${absencesSummary}\nAssignments: ${assignmentsSummary}`;
+      ? `Bonjour ${parentName},\n\nVoici le résumé de la semaine de ${studentName}.\n\nNotes : ${gradesSummary}\nAbsences : ${absencesSummary}\nDevoirs : ${assignmentsSummary}\n\nBonne semaine !`
+      : language === 'ar'
+      ? `مرحباً ${parentName},\n\nإليك ملخص أسبوع ${studentName}.\n\nالدرجات: ${gradesSummary}\nالغياب: ${absencesSummary}\nالواجبات: ${assignmentsSummary}\n\nأسبوع سعيد!`
+      : `Dear ${parentName},\n\nHere is ${studentName}'s weekly summary.\n\nGrades: ${gradesSummary}\nAbsences: ${absencesSummary}\nAssignments: ${assignmentsSummary}\n\nHave a great week!`;
   }
 }
 
@@ -244,9 +233,7 @@ async function fetchStudentWeekData(
   // Devoirs dont l'échéance est cette semaine
   const { data: assignments } = await supabaseAdmin
     .from('assignments')
-    .select(
-      'title, due_date, subjects:subject_id(name)'
-    )
+    .select('title, due_date, subjects:subject_id(name)')
     .eq('class_id', (student as any)?.classes?.id ?? '')
     .gte('due_date', weekStart)
     .lte('due_date', weekEnd);
@@ -370,7 +357,7 @@ export async function runWeeklyReportJob(): Promise<void> {
       console.error(`❌ [WeeklyReport] Échec envoi email à ${profile.email}:`, err);
     }
 
-    // Petite pause pour ne pas surcharger l'API LLM
+    // Petite pause pour ne pas surcharger Ollama
     await new Promise((r) => setTimeout(r, 1500));
   }
 

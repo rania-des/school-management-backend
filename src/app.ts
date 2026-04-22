@@ -30,6 +30,8 @@ import dbRoutes           from './routes/db.routes';
 import downloadRoutes     from './modules/student/download.routes';
 // ✅ NEW — AI prediction module
 import aiRoutes           from './modules/ai/ai.routes';
+// ✅ Weekly report job
+import { runWeeklyReportJob, registerWeeklyReportCron } from './modules/notifications/weeklyReport.service';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -64,7 +66,7 @@ app.use(cors({
 
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
-// ✅ CORRECTION: Augmentation de la limite JSON à 50mb
+// ✅ Augmentation de la limite JSON à 50mb
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(globalRateLimit);
@@ -111,6 +113,24 @@ app.use(`${API}/student`,       downloadRoutes);
 app.get(`${API}/ping`, (_req, res) => {
   res.json({ message: 'pong', timestamp: new Date().toISOString() });
 });
+
+// ==================== ROUTE TEST WEEKLY REPORT ====================
+// 🧪 Route de test manuelle — déclenche le job immédiatement
+// Accès : GET http://localhost:3000/api/v1/test-weekly-report
+app.get(`${API}/test-weekly-report`, async (_req, res) => {
+  try {
+    console.log('🧪 [WeeklyReport] Déclenchement manuel du job...');
+    await runWeeklyReportJob();
+    res.json({ success: true, message: 'Job exécuté — vérifie ta boîte mail et les logs du serveur' });
+  } catch (err: any) {
+    console.error('❌ [WeeklyReport] Erreur lors du déclenchement manuel:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ==================== CRON JOBS ====================
+// ⏰ Enregistrer le cron du rapport hebdomadaire (dimanche 20h00)
+registerWeeklyReportCron();
 
 // ==================== ERROR HANDLING ====================
 
