@@ -153,7 +153,39 @@ router.get('/dashboard/teacher', authorize('teacher', 'admin'), async (req: Requ
         })
       );
 
-      const inDifficulty = studentAverages.filter((s) => s.average && s.average < 10);
+      // MODIFICATION: Enrichir inDifficulty avec attendanceRate + riskLevel heuristique
+      const inDifficultyRaw = await Promise.all(
+        studentAverages
+          .filter((s) => s.average !== null)
+          .map(async (s) => {
+            const { data: att } = await supabaseAdmin
+              .from('attendance')
+              .select('status')
+              .eq('student_id', s.id);
+
+            const total   = (att || []).length;
+            const present = (att || []).filter((a: any) => a.status === 'present').length;
+            const attendanceRate = total > 0 ? Math.round((present / total) * 100) : null;
+
+            // Même heuristique que aiService (sans Ollama — rapide)
+            let riskScore = 0;
+            if (s.average < 8)        riskScore += 3;
+            else if (s.average < 10)  riskScore += 2;
+            else if (s.average < 12)  riskScore += 1;
+            if (attendanceRate !== null) {
+              if (attendanceRate < 70)       riskScore += 3;
+              else if (attendanceRate < 85)  riskScore += 1;
+            }
+            const riskLevel: 'high' | 'medium' | 'low' =
+              riskScore >= 5 ? 'high' : riskScore >= 2 ? 'medium' : 'low';
+
+            return { ...s, attendanceRate, riskLevel };
+          })
+      );
+
+      const inDifficulty = inDifficultyRaw.filter(
+        (s) => s.average < 10 || s.riskLevel === 'high'
+      );
 
       classStats = {
         average,

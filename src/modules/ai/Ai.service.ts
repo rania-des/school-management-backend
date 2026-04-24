@@ -27,7 +27,7 @@ export interface PredictOutput {
 // ─── Helpers ──────────────────────────────────────────────
 async function callOllama(prompt: string): Promise<string> {
   const controller = new AbortController();
-  const timeout    = setTimeout(() => controller.abort(), 30_000);
+  const timeout    = setTimeout(() => controller.abort(), 120_000);
 
   try {
     const response = await fetch(OLLAMA_URL, {
