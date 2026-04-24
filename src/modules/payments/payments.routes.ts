@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { authenticate, authorize } from '../../middleware/auth.middleware';
 import { AppError } from '../../middleware/error.middleware';
 import { successResponse, getPagination, paginate } from '../../utils/pagination';
+import PDFDocument from 'pdfkit';
 
 const router = Router();
 router.use(authenticate);
@@ -106,6 +107,114 @@ router.get('/stats', authorize('admin'), async (req: Request, res: Response, nex
   } catch (err) { return next(err); }
 });
 
+// GET /payments/:id/receipt
+router.get('/:id/receipt', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const paymentId = req.params.id;
+    
+    // Récupérer le paiement avec les infos de l'élève
+    const { data: paymentData, ok } = await sbGet(
+      `payments?id=eq.${paymentId}&select=*,students(id,profiles(first_name,last_name,email))`
+    );
+    
+    if (!ok || !paymentData || (Array.isArray(paymentData) && paymentData.length === 0)) {
+      throw new AppError('Paiement non trouvé', 404);
+    }
+    
+    const payment = Array.isArray(paymentData) ? paymentData[0] : paymentData;
+    
+    // Vérifier les droits d'accès
+    if (req.user!.role === 'parent') {
+      const { data: parents } = await sbGet(`parents?profile_id=eq.${req.user!.id}&select=id`);
+      const parentId = Array.isArray(parents) ? parents[0]?.id : null;
+      if (parentId) {
+        const { data: links } = await sbGet(`parent_student?parent_id=eq.${parentId}&select=student_id`);
+        const childIds = (Array.isArray(links) ? links : []).map((c: any) => c.student_id);
+        if (!childIds.includes(payment.student_id)) {
+          throw new AppError('Accès non autorisé', 403);
+        }
+      } else {
+        throw new AppError('Accès non autorisé', 403);
+      }
+    } else if (req.user!.role !== 'admin') {
+      throw new AppError('Accès non autorisé', 403);
+    }
+    
+    // Générer le PDF
+    const doc = new PDFDocument({ margin: 50, size: 'A4' });
+    
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="recu-paiement-${paymentId.substring(0,8)}.pdf"`);
+    
+    doc.pipe(res);
+    
+    // Logo et en-tête
+    doc.fontSize(20).font('Helvetica-Bold').text('ECOLE PRIMAIRE', { align: 'center' });
+    doc.fontSize(12).font('Helvetica').text('Excellence et Savoir', { align: 'center' });
+    doc.moveDown();
+    doc.fontSize(14).font('Helvetica-Bold').text('REÇU DE PAIEMENT', { align: 'center' });
+    doc.moveDown();
+    
+    // Ligne de séparation
+    doc.strokeColor('#cccccc').lineWidth(1).moveTo(50, doc.y).lineTo(550, doc.y).stroke();
+    doc.moveDown();
+    
+    // Informations du reçu
+    doc.fontSize(10).font('Helvetica');
+    doc.text(`N° Reçu: ${paymentId.substring(0,8)}`, { align: 'right' });
+    doc.text(`Date d'émission: ${new Date().toLocaleDateString('fr-FR')}`, { align: 'right' });
+    doc.moveDown();
+    
+    // Informations élève
+    doc.fontSize(12).font('Helvetica-Bold').text('INFORMATIONS ÉLÈVE');
+    doc.fontSize(10).font('Helvetica');
+    const studentProfile = payment.students?.profiles || {};
+    doc.text(`Nom et prénom: ${studentProfile.first_name || ''} ${studentProfile.last_name || ''}`);
+    doc.text(`Email: ${studentProfile.email || '-'}`);
+    doc.moveDown();
+    
+    // Détails du paiement
+    doc.fontSize(12).font('Helvetica-Bold').text('DÉTAILS DU PAIEMENT');
+    doc.fontSize(10).font('Helvetica');
+    
+    const typeLabels: Record<string, string> = {
+      tuition: 'Scolarité',
+      canteen: 'Cantine',
+      trip: 'Sortie scolaire',
+      activity: 'Activité',
+      other: 'Autre'
+    };
+    
+    doc.text(`Type: ${typeLabels[payment.type] || payment.type}`);
+    doc.text(`Description: ${payment.description || '-'}`);
+    doc.text(`Montant: ${payment.amount} TND`);
+    doc.text(`Statut: ${payment.status === 'paid' ? '✅ PAYÉ' : payment.status.toUpperCase()}`);
+    if (payment.due_date) {
+      doc.text(`Date d'échéance: ${new Date(payment.due_date).toLocaleDateString('fr-FR')}`);
+    }
+    if (payment.paid_at) {
+      doc.text(`Date de paiement: ${new Date(payment.paid_at).toLocaleDateString('fr-FR')}`);
+    }
+    doc.moveDown();
+    
+    // Ligne de séparation
+    doc.strokeColor('#cccccc').lineWidth(1).moveTo(50, doc.y).lineTo(550, doc.y).stroke();
+    doc.moveDown();
+    
+    // Montant total en gros
+    doc.fontSize(16).font('Helvetica-Bold').text(`Montant total réglé: ${payment.amount} TND`, { align: 'center' });
+    doc.moveDown();
+    
+    // Mentions légales
+    doc.fontSize(8).font('Helvetica');
+    doc.text('Ce document fait office de reçu officiel. Merci de conserver ce justificatif.', { align: 'center' });
+    doc.text(`Généré le ${new Date().toLocaleString('fr-FR')}`, { align: 'center' });
+    
+    doc.end();
+    
+  } catch (err) { return next(err); }
+});
+
 // POST /payments
 router.post('/', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -125,7 +234,7 @@ router.post('/', authorize('admin'), async (req: Request, res: Response, next: N
 });
 
 // PATCH /payments/:id/mark-paid
-router.patch('/:id/mark-paid', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
+router.patch('/:id/mark-paid', authorize('admin', 'parent'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { data, ok } = await sbPatch(`payments?id=eq.${req.params.id}`, {
       status: 'paid',

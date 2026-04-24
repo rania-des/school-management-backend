@@ -38,10 +38,12 @@ export const resetPasswordWithTokenSchema = z.object({
     ),
 });
 
+// ✅ POINT 2 — Ajouter currentPassword pour vérifier l'ancien mot de passe
 export const updatePasswordSchema = z.object({
+  currentPassword: z.string().min(1, 'Le mot de passe actuel est requis'),
   password: z
     .string()
-    .min(8)
+    .min(8, 'Le nouveau mot de passe doit faire au moins 8 caractères')
     .regex(
       /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/,
       'Le mot de passe doit contenir majuscule, minuscule et chiffre'

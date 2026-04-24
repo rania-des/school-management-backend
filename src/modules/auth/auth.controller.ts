@@ -58,10 +58,11 @@ export class AuthController {
     } catch (err) { return next(err); }
   }
 
+  // ✅ POINT 2 — Transmettre currentPassword au service pour vérification
   async updatePassword(req: Request, res: Response, next: NextFunction) {
     try {
-      const { password } = updatePasswordSchema.parse(req.body);
-      const result       = await authService.updatePassword(req.user!.id, password);
+      const { currentPassword, password } = updatePasswordSchema.parse(req.body);
+      const result = await authService.updatePassword(req.user!.id, currentPassword, password);
       return res.json(result);
     } catch (err) { return next(err); }
   }

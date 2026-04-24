@@ -1,5 +1,7 @@
 import { Router, Request, Response } from 'express';
 import multer from 'multer';
+import { authenticate } from '../../middleware/auth.middleware';
+import { strictRateLimit } from '../../middleware/rateLimit.middleware';
 
 const router = Router();
 const upload = multer({ 
@@ -7,7 +9,7 @@ const upload = multer({
   limits: { fileSize: 20 * 1024 * 1024 } 
 });
 
-router.post('/extract', upload.single('file'), async (req: Request, res: Response) => {
+router.post('/extract', authenticate, strictRateLimit, upload.single('file'), async (req: Request, res: Response) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'Aucun fichier fourni' });

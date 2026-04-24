@@ -4,6 +4,7 @@ import { supabaseAdmin } from '../../config/supabase';
 import { AppError } from '../../middleware/error.middleware';
 import { successResponse } from '../../utils/pagination';
 import multer from 'multer';
+import { uploadRateLimit } from '../../middleware/rateLimit.middleware';
 import { exec } from 'child_process';
 import { writeFileSync, unlinkSync, existsSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
@@ -94,7 +95,7 @@ function extractJson<T>(raw: string, fallback: T): T {
 // audio blob → Ollama Whisper API → { transcription: string }
 // Zéro dépendance système (pas de ffmpeg, pas de CLI Whisper)
 // ═══════════════════════════════════════════════════════════
-router.post('/speech-to-text', upload.single('audio'), async (req, res, next) => {
+router.post('/speech-to-text', uploadRateLimit, upload.single('audio'), async (req, res, next) => {
   try {
     if (!req.file) throw new AppError('No audio file provided', 400);
 
@@ -384,7 +385,7 @@ router.get('/my-assignments', async (req, res, next) => {
 });
 
 // ─── POST /student/my-assignments/:assignmentId/submit ────────────────────────
-router.post('/my-assignments/:assignmentId/submit', upload.single('file'), async (req, res, next) => {
+router.post('/my-assignments/:assignmentId/submit', uploadRateLimit, upload.single('file'), async (req, res, next) => {
   try {
     const { assignmentId } = req.params;
     const { data: students } = await sbGet(`students?profile_id=eq.${req.user!.id}&select=id`);

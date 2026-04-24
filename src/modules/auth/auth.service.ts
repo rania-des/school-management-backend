@@ -1,4 +1,4 @@
-console.log('🔥🔥🔥 AUTH SERVICE V6 🔥🔥🔥');
+console.log('🔥🔥🔥 AUTH SERVICE V7 🔥🔥🔥');
 
 import { createClient } from '@supabase/supabase-js';
 import { AppError } from '../../middleware/error.middleware';
@@ -46,7 +46,7 @@ async function fetchProfile(userId: string, accessToken: string) {
   const data = await res.json() as unknown[];
   const profile = Array.isArray(data) ? data[0] ?? null : null;
   console.log('🔵 Profile found:', !!profile);
-  return profile as Record<string, string> | null;
+  return profile as Record<string, unknown> | null;
 }
 
 export class AuthService {
@@ -78,6 +78,12 @@ export class AuthService {
     if (!profile) {
       console.log('🔴 No profile found for user:', userId);
       throw new AppError('Profil introuvable', 404);
+    }
+
+    // ✅ POINT 1 — Vérifier is_active : refuser les comptes désactivés
+    if (profile['is_active'] === false) {
+      console.log('🔴 Account disabled for user:', userId);
+      throw new AppError('Compte désactivé. Veuillez contacter l\'administrateur.', 403);
     }
 
     console.log('✅ Login successful! Role:', profile['role']);
@@ -178,7 +184,25 @@ export class AuthService {
     return { message: 'Mot de passe réinitialisé avec succès' };
   }
 
-  async updatePassword(userId: string, newPassword: string) {
+  // ✅ POINT 2 — Vérifier l'ancien mot de passe avant de mettre à jour
+  async updatePassword(userId: string, currentPassword: string, newPassword: string) {
+    // Récupérer l'email de l'utilisateur depuis le profil admin
+    const { data: userData, error: userError } = await supabaseAdmin.auth.admin.getUserById(userId);
+    if (userError || !userData?.user?.email) {
+      throw new AppError('Utilisateur introuvable', 404);
+    }
+
+    // Vérifier l'ancien mot de passe via signInWithPassword
+    const { error: signInError } = await supabasePublic.auth.signInWithPassword({
+      email: userData.user.email,
+      password: currentPassword,
+    });
+
+    if (signInError) {
+      throw new AppError('Mot de passe actuel incorrect', 401);
+    }
+
+    // Mettre à jour le mot de passe
     const { error } = await supabaseAdmin.auth.admin.updateUserById(userId, { password: newPassword });
     if (error) throw new AppError('Échec de la mise à jour du mot de passe', 500);
     return { message: 'Mot de passe mis à jour avec succès' };

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { aiController } from './ai.controller';
 import { authenticate } from '../../middleware/auth.middleware';
+import { strictRateLimit } from '../../middleware/rateLimit.middleware';
 
 const router = Router();
 
@@ -27,6 +28,6 @@ router.use(authenticate);
  *   502 — Ollama HTTP error
  *   504 — Ollama timeout
  */
-router.post('/predict', (req, res, next) => aiController.predict(req, res, next));
+router.post('/predict', strictRateLimit, (req, res, next) => aiController.predict(req, res, next));
 
 export default router;

@@ -8,6 +8,7 @@ import { successResponse, getPagination, paginate } from '../../utils/pagination
 import { createBulkNotifications, getClassStudentProfileIds } from '../../utils/notifications';
 import { uploadFile, deleteFile, STORAGE_BUCKETS } from '../../utils/storage';
 import multer from 'multer';
+import { uploadRateLimit } from '../../middleware/rateLimit.middleware';
 
 const router = Router();
 router.use(authenticate);
@@ -88,7 +89,7 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
 });
 
 // POST /assignments - teacher creates
-router.post('/', authorize('teacher', 'admin'), upload.single('file'), async (req: Request, res: Response, next: NextFunction) => {
+router.post('/', authorize('teacher', 'admin'), uploadRateLimit, upload.single('file'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = assignmentSchema.parse(
       typeof req.body === 'string' ? JSON.parse(req.body) : req.body
@@ -198,7 +199,7 @@ router.get('/:id/submissions', async (req: Request, res: Response, next: NextFun
 });
 
 // POST /assignments/:id/submissions - student submits
-router.post('/:id/submissions', authorize('student'), upload.single('file'), async (req: Request, res: Response, next: NextFunction) => {
+router.post('/:id/submissions', authorize('student'), uploadRateLimit, upload.single('file'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { data: student } = await supabaseAdmin
       .from('students').select('id').eq('profile_id', req.user!.id).single();

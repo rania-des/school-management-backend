@@ -46,9 +46,9 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
       return res.status(401).json({ error: 'Token invalide ou expiré' });
     }
 
-    // Fetch profile using user's own JWT (no service_role needed)
+    // Fetch profile using user's own JWT — inclure is_active pour vérification
     const profileRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/profiles?id=eq.${user.id}&select=role,first_name,last_name`,
+      `${SUPABASE_URL}/rest/v1/profiles?id=eq.${user.id}&select=role,first_name,last_name,is_active`,
       {
         headers: {
           'apikey': SUPABASE_ANON_KEY,
@@ -66,6 +66,11 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
 
     if (!profile) {
       return res.status(401).json({ error: 'Profil utilisateur introuvable' });
+    }
+
+    // ✅ POINT 1 — Bloquer les comptes désactivés à chaque requête
+    if (profile.is_active === false) {
+      return res.status(403).json({ error: 'Compte désactivé. Veuillez contacter l\'administrateur.' });
     }
 
     req.user = {

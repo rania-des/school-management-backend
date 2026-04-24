@@ -849,4 +849,26 @@ router.get('/profile-by-id/:parentId', async (req: Request, res: Response, next:
   }
 });
 
+// GET /api/v1/parent/children/:childId/payments
+router.get('/children/:childId/payments', async (req, res, next) => {
+  try {
+    const { childId } = req.params;
+    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
+    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
+
+    // Vérifier que cet enfant appartient bien à ce parent
+    const children = await getParentChildren(req.user!.id);
+    const hasChild = children.some((c: any) => c.student_id === childId);
+    if (!hasChild) throw new AppError('Accès non autorisé à cet enfant', 403);
+
+    const url = `${SUPABASE_URL}/rest/v1/payments?student_id=eq.${childId}&select=*&order=created_at.desc`;
+    const resData = await fetch(url, { headers: H });
+    const data = (await resData.json()) as any[];
+    if (!resData.ok) throw new AppError('Failed to fetch payments', 500);
+
+    res.json(successResponse(data || []));
+  } catch (err) { next(err); }
+});
+
 export default router;
