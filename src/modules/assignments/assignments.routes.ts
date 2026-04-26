@@ -20,7 +20,7 @@ const assignmentSchema = z.object({
   academicYearId: z.string().uuid(),
   title: z.string().min(1).max(255),
   description: z.string().optional(),
-  type: z.enum(['homework', 'project', 'exam', 'exercise', 'report']),
+  type: z.enum(['homework', 'project', 'exam', 'exercise', 'report', 'course']),
   dueDate: z.string().optional(),
   points: z.number().optional(),
 });
@@ -124,12 +124,21 @@ router.post('/', authorize('teacher', 'admin'), uploadRateLimit, upload.single('
 
     // Notify all students in the class
     const studentProfileIds = await getClassStudentProfileIds(body.classId);
-    await createBulkNotifications(studentProfileIds, {
-      type: 'assignment',
-      title: 'Nouveau devoir',
-      body: `${body.title} - à rendre le ${body.dueDate || 'date non définie'}`,
-      data: { assignmentId: data.id },
-    });
+    if (body.type === 'course') {
+      await createBulkNotifications(studentProfileIds, {
+        type: 'course',
+        title: '📖 Nouveau cours disponible',
+        body: `${body.title} - Consultez-le maintenant dans votre espace cours`,
+        data: { courseId: data.id, type: 'course' },
+      });
+    } else {
+      await createBulkNotifications(studentProfileIds, {
+        type: 'assignment',
+        title: 'Nouveau devoir',
+        body: `${body.title} - à rendre le ${body.dueDate || 'date non définie'}`,
+        data: { assignmentId: data.id },
+      });
+    }
 
     return res.status(201).json(successResponse(data, 'Assignment created'));
   } catch (err) {
