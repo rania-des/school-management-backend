@@ -32,6 +32,48 @@ router.use(authenticate);
 router.post('/predict', strictRateLimit, (req, res, next) => aiController.predict(req, res, next));
 
 /**
+ * POST /api/v1/ai/chat
+ * Body: { userMessage: string, language: 'fr'|'en', history?: {role,content}[] }
+ */
+router.post('/chat', strictRateLimit, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { userMessage, language = 'fr', history = [] } = req.body;
+    if (!userMessage) throw new AppError('userMessage requis', 400);
+
+    // Import callOllama via le service existant
+    const { aiService: aiServiceModule } = await import('./ai.service');
+
+    const historyText = history.slice(-8)
+      .map((m: any) => `${m.role === 'user' ? 'Élève' : 'Assistant'}: ${m.content}`)
+      .join('\n');
+
+    const systemPrompt = language === 'fr'
+      ? `Tu es un assistant scolaire intelligent pour un élève tunisien. Réponds en français de manière claire, pédagogique et encourageante. Sois concis mais utile.`
+      : `You are an intelligent school assistant for a Tunisian student. Respond in English clearly, pedagogically and encouragingly.`;
+
+    const prompt = `${systemPrompt}\n\nHistorique:\n${historyText}\n\nÉlève: ${userMessage}\nAssistant:`;
+
+    // Appel direct Ollama
+    const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434/api/generate';
+    const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'mistral:7b';
+
+    const response = await fetch(OLLAMA_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: OLLAMA_MODEL, prompt, stream: false, options: { temperature: 0.7, num_predict: 800 } }),
+      signal: AbortSignal.timeout(60000),
+    });
+
+    if (!response.ok) throw new AppError(`Ollama HTTP ${response.status}`, 502);
+    const data = await response.json() as { response?: string };
+
+    return res.json({ success: true, data: { prediction: data.response || '' } });
+  } catch (err: any) {
+    return next(err);
+  }
+});
+
+/**
  * GET /api/v1/ai/teacher/students/predictions
  * 
  * Query params:
