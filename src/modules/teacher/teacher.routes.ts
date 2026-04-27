@@ -1224,5 +1224,43 @@ router.post('/attendance/qr-session', async (req, res, next) => {
   }
 });
 
+router.get('/my-notifications', async (req, res, next) => {
+  try {
+    const userId = req.user!.id;
+    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
+
+    const resNotif = await fetch(
+      `${SUPABASE_URL}/rest/v1/notifications?user_id=eq.${userId}&order=created_at.desc&limit=100`,
+      { headers: H }
+    );
+    const data = await resNotif.json();
+
+    if (!resNotif.ok) throw new AppError('Failed to fetch notifications', 500);
+
+    res.json(successResponse(data || []));
+  } catch (err) { next(err); }
+});
+
+router.patch('/my-notifications/:id/read', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user!.id;
+    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' };
+
+    const resUpdate = await fetch(
+      `${SUPABASE_URL}/rest/v1/notifications?id=eq.${id}&user_id=eq.${userId}`,
+      {
+        method: 'PATCH',
+        headers: H,
+        body: JSON.stringify({ is_read: true })
+      }
+    );
+
+    if (!resUpdate.ok) throw new AppError('Failed to mark as read', 500);
+
+    res.json(successResponse(null, 'Notification marquée comme lue'));
+  } catch (err) { next(err); }
+});
+
 
 export default router;
