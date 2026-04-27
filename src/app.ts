@@ -2,9 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
-import dotenv from 'dotenv';
 import pdfRoutes from './modules/pdf/pdf.routes';
-dotenv.config();
 
 import { globalRateLimit, authRateLimit } from './middleware/rateLimit.middleware';
 import { errorHandler, notFound } from './middleware/error.middleware';

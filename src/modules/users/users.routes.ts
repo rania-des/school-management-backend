@@ -196,18 +196,26 @@ router.patch('/me/profile', async (req: Request, res: Response, next: NextFuncti
 // PATCH /users/:id/profile (admin)
 router.patch('/:id/profile', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const body = updateProfileSchema.parse(req.body);
-    const upd: Record<string, unknown> = {};
-    if (body.firstName) upd.first_name = body.firstName;
-    if (body.lastName) upd.last_name = body.lastName;
-    if (body.phone !== undefined) upd.phone = body.phone;
-    if (body.address !== undefined) upd.address = body.address;
-    if (body.gender) upd.gender = body.gender;
-    if (body.dateOfBirth) upd.date_of_birth = body.dateOfBirth;
-    const { data, ok } = await sbPatch(`profiles?id=eq.${req.params.id}`, upd);
-    if (!ok || !data) throw new AppError('User not found', 404);
+    const { id } = req.params;
+    const { firstName, lastName, phone, address, gender, dateOfBirth } = req.body;
+
+    const updates: Record<string, any> = {};
+    if (firstName !== undefined) updates.first_name = firstName;
+    if (lastName !== undefined) updates.last_name = lastName;
+    if (phone !== undefined) updates.phone = phone;
+    if (address !== undefined) updates.address = address;
+    if (gender !== undefined) updates.gender = gender;
+    if (dateOfBirth !== undefined) updates.date_of_birth = dateOfBirth;
+
+    if (Object.keys(updates).length === 0) {
+      throw new AppError('No fields to update', 400);
+    }
+
+    const { data, error } = await sbPatch(`profiles?id=eq.${id}`, updates);
+    if (!error && !data) throw new AppError('User not found', 404);
+    if (error) throw new AppError('Failed to update profile', 500);
     
-    const roleData = await getRoleData(req.params.id, data.role);
+    const roleData = await getRoleData(id, data.role);
     
     return res.json(successResponse({ ...data, roleData }, 'Profile updated'));
   } catch (err) { return next(err); }

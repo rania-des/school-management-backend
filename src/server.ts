@@ -1,4 +1,9 @@
 import 'dotenv/config';
+
+// 🔧 Fix ETIMEDOUT sur Windows — forcer IPv4 (Node 18+ préfère IPv6 par défaut)
+import { setDefaultResultOrder } from 'dns';
+setDefaultResultOrder('ipv4first');
+
 console.log('🚀 === SERVER STARTING ===');
 console.log('🔵 Node version:', process.version);
 console.log('🔵 Environment:', process.env.NODE_ENV);

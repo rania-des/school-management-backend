@@ -870,4 +870,176 @@ router.get('/students-with-class', authorize('admin'), async (req: Request, res:
   }
 });
 
+// =============================================================================
+// TEACHERS LIST (for assignments dropdown)
+// =============================================================================
+
+// GET /admin/teachers - list teachers with their internal id
+router.get('/teachers', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('teachers')
+      .select('id, profile_id, specialization, employee_number, profiles:profile_id(first_name, last_name, email)');
+
+    if (error) throw new AppError('Failed to fetch teachers', 500);
+
+    // Format data
+    const formatted = (data || []).map((teacher: any) => ({
+      id: teacher.id,
+      profile_id: teacher.profile_id,
+      specialization: teacher.specialization,
+      employee_number: teacher.employee_number,
+      first_name: teacher.profiles?.first_name || '',
+      last_name: teacher.profiles?.last_name || '',
+      email: teacher.profiles?.email || '',
+    }));
+
+    return res.json(successResponse(formatted));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// =============================================================================
+// STUDENT UPDATE (specific)
+// =============================================================================
+
+// PATCH /admin/students/:profileId - update student-specific data
+router.patch('/students/:profileId', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { profileId } = req.params;
+    const { studentNumber, classId, enrollmentDate, firstName, lastName, phone, address } = req.body;
+
+    // Update profile
+    const profileUpdates: Record<string, any> = {};
+    if (firstName !== undefined) profileUpdates.first_name = firstName;
+    if (lastName !== undefined) profileUpdates.last_name = lastName;
+    if (phone !== undefined) profileUpdates.phone = phone;
+    if (address !== undefined) profileUpdates.address = address;
+
+    if (Object.keys(profileUpdates).length > 0) {
+      const { error: profileError } = await supabaseAdmin
+        .from('profiles')
+        .update(profileUpdates)
+        .eq('id', profileId);
+
+      if (profileError) throw new AppError('Failed to update profile', 500);
+    }
+
+    // Update students table
+    const studentUpdates: Record<string, any> = {};
+    if (studentNumber !== undefined) studentUpdates.student_number = studentNumber;
+    if (classId !== undefined) studentUpdates.class_id = classId || null;
+    if (enrollmentDate !== undefined) studentUpdates.enrollment_date = enrollmentDate || null;
+
+    if (Object.keys(studentUpdates).length > 0) {
+      const { data, error } = await supabaseAdmin
+        .from('students')
+        .update(studentUpdates)
+        .eq('profile_id', profileId)
+        .select()
+        .single();
+
+      if (error) throw new AppError('Failed to update student', 500);
+      return res.json(successResponse(data, 'Student updated'));
+    }
+
+    return res.json(successResponse(null, 'Student updated'));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// =============================================================================
+// TEACHER UPDATE (specific)
+// =============================================================================
+
+// PATCH /admin/teachers/:profileId - update teacher-specific data
+router.patch('/teachers/:profileId', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { profileId } = req.params;
+    const { specialization, employeeNumber, hireDate, firstName, lastName, phone, address } = req.body;
+
+    // Update profile
+    const profileUpdates: Record<string, any> = {};
+    if (firstName !== undefined) profileUpdates.first_name = firstName;
+    if (lastName !== undefined) profileUpdates.last_name = lastName;
+    if (phone !== undefined) profileUpdates.phone = phone;
+    if (address !== undefined) profileUpdates.address = address;
+
+    if (Object.keys(profileUpdates).length > 0) {
+      const { error: profileError } = await supabaseAdmin
+        .from('profiles')
+        .update(profileUpdates)
+        .eq('id', profileId);
+
+      if (profileError) throw new AppError('Failed to update profile', 500);
+    }
+
+    // Update teachers table
+    const teacherUpdates: Record<string, any> = {};
+    if (specialization !== undefined) teacherUpdates.specialization = specialization;
+    if (employeeNumber !== undefined) teacherUpdates.employee_number = employeeNumber;
+    if (hireDate !== undefined) teacherUpdates.hire_date = hireDate || null;
+
+    if (Object.keys(teacherUpdates).length > 0) {
+      const { data, error } = await supabaseAdmin
+        .from('teachers')
+        .update(teacherUpdates)
+        .eq('profile_id', profileId)
+        .select()
+        .single();
+
+      if (error) throw new AppError('Failed to update teacher', 500);
+      return res.json(successResponse(data, 'Teacher updated'));
+    }
+
+    return res.json(successResponse(null, 'Teacher updated'));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// =============================================================================
+// PARENT UPDATE (specific)
+// =============================================================================
+
+// PATCH /admin/parents/:profileId - update parent-specific data
+router.patch('/parents/:profileId', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { profileId } = req.params;
+    const { profession, firstName, lastName, phone, address } = req.body;
+
+    // Update profile
+    const profileUpdates: Record<string, any> = {};
+    if (firstName !== undefined) profileUpdates.first_name = firstName;
+    if (lastName !== undefined) profileUpdates.last_name = lastName;
+    if (phone !== undefined) profileUpdates.phone = phone;
+    if (address !== undefined) profileUpdates.address = address;
+
+    if (Object.keys(profileUpdates).length > 0) {
+      const { error: profileError } = await supabaseAdmin
+        .from('profiles')
+        .update(profileUpdates)
+        .eq('id', profileId);
+
+      if (profileError) throw new AppError('Failed to update profile', 500);
+    }
+
+    // Update parents table
+    if (profession !== undefined) {
+      const { error: parentError } = await supabaseAdmin
+        .from('parents')
+        .update({ profession })
+        .eq('profile_id', profileId);
+
+      if (parentError) throw new AppError('Failed to update parent', 500);
+    }
+
+    return res.json(successResponse(null, 'Parent updated'));
+  } catch (err) {
+    return next(err);
+  }
+});
+
 export default router;
