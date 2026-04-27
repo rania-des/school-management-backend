@@ -12,6 +12,24 @@ router.use(authorize('teacher', 'admin'));
 
 const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
+const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' };
+
+async function sbGet(path: string) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { headers: H });
+  const data = await res.json();
+  if (!res.ok) console.error(`❌ sbGet ${path.split('?')[0]} →`, res.status, JSON.stringify(data).slice(0, 200));
+  return { data, ok: res.ok };
+}
+
+async function sbPatch(path: string, body: any) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    method: 'PATCH',
+    headers: { ...H, 'Prefer': 'return=representation' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json() as any[];
+  return { data: Array.isArray(data) ? data[0] : data, ok: res.ok };
+}
 
 function extractFirstItem(data: any): any {
   if (!data) return null;
@@ -23,10 +41,7 @@ async function getTeacherId(profileId: string): Promise<string> {
   const url = `${SUPABASE_URL}/rest/v1/teachers?profile_id=eq.${profileId}&select=id`;
   
   const res = await fetch(url, {
-    headers: { 
-      'apikey': SUPABASE_KEY, 
-      'Authorization': `Bearer ${SUPABASE_KEY}` 
-    }
+    headers: H
   });
   
   const data = (await res.json()) as any[];
@@ -1224,43 +1239,69 @@ router.post('/attendance/qr-session', async (req, res, next) => {
   }
 });
 
+
 router.get('/my-notifications', async (req, res, next) => {
   try {
     const userId = req.user!.id;
-    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
-
-    const resNotif = await fetch(
+    
+    console.log('📡 GET /teacher/my-notifications for user:', userId);
+    
+    const response = await fetch(
       `${SUPABASE_URL}/rest/v1/notifications?user_id=eq.${userId}&order=created_at.desc&limit=100`,
-      { headers: H }
+      {
+        headers: {
+          'apikey': SUPABASE_KEY,
+          'Authorization': `Bearer ${SUPABASE_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
     );
-    const data = await resNotif.json();
-
-    if (!resNotif.ok) throw new AppError('Failed to fetch notifications', 500);
-
+    
+    const data = await response.json();
+    
+    if (!response.ok) {
+      console.error('Failed to fetch notifications:', response.status);
+      throw new AppError('Failed to fetch notifications', 500);
+    }
+    
+    console.log(`✅ ${data?.length || 0} notifications loaded`);
     res.json(successResponse(data || []));
-  } catch (err) { next(err); }
+  } catch (err) { 
+    console.error('Erreur:', err);
+    next(err); 
+  }
 });
 
 router.patch('/my-notifications/:id/read', async (req, res, next) => {
   try {
     const { id } = req.params;
     const userId = req.user!.id;
-    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' };
-
-    const resUpdate = await fetch(
+    
+    console.log(`📡 Marking notification ${id} as read for teacher ${userId}`);
+    
+    const response = await fetch(
       `${SUPABASE_URL}/rest/v1/notifications?id=eq.${id}&user_id=eq.${userId}`,
       {
         method: 'PATCH',
-        headers: H,
+        headers: {
+          'apikey': SUPABASE_KEY,
+          'Authorization': `Bearer ${SUPABASE_KEY}`,
+          'Content-Type': 'application/json'
+        },
         body: JSON.stringify({ is_read: true })
       }
     );
-
-    if (!resUpdate.ok) throw new AppError('Failed to mark as read', 500);
-
+    
+    if (!response.ok) {
+      console.error('Failed to mark as read:', response.status);
+      throw new AppError('Failed to mark as read', 500);
+    }
+    
+    console.log('✅ Notification marked as read');
     res.json(successResponse(null, 'Notification marquée comme lue'));
-  } catch (err) { next(err); }
+  } catch (err) { 
+    console.error('Erreur:', err);
+    next(err); 
+  }
 });
-
-
 export default router;
