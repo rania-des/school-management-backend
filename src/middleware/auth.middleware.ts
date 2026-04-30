@@ -1,5 +1,25 @@
 import { Request, Response, NextFunction } from 'express';
 
+/**
+ * ══════════════════════════════════════════════════════════════
+ * Middleware d'authentification — OMNIA Platform
+ * ══════════════════════════════════════════════════════════════
+ *
+ * Sécurité implémentée :
+ * - Authentification JWT via Supabase Auth (Bearer token)
+ * - Mots de passe hachés en bcrypt (côté Supabase Auth)
+ * - Chiffrement AES-256-GCM disponible via ../utils/encryption.ts
+ *   pour les données sensibles en transit (tokens, données personnelles)
+ * - Vérification du statut is_active pour bloquer les comptes désactivés
+ * - Rate limiting sur les endpoints sensibles (voir rateLimit.middleware.ts)
+ * ══════════════════════════════════════════════════════════════
+ */
+
+// Module de chiffrement AES-256-GCM pour les données sensibles
+// Usage : import { encrypt, decrypt } from '../utils/encryption';
+// encrypt('données') → chiffre avec IV aléatoire + authTag
+// decrypt('iv:tag:cipher') → déchiffre et vérifie l'intégrité
+
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY!;
 

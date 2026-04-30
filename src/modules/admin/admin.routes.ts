@@ -1042,4 +1042,57 @@ router.patch('/parents/:profileId', authorize('admin'), async (req: Request, res
   }
 });
 
+// =============================================================================
+// MODULE SETTINGS (shared across all users)
+// =============================================================================
+
+import fs from 'fs';
+import path from 'path';
+
+const MODULES_FILE = path.join(__dirname, '../../../data/modules.json');
+
+function ensureDataDir() {
+  const dir = path.dirname(MODULES_FILE);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
+
+function readModules(): Record<string, boolean> {
+  try {
+    ensureDataDir();
+    if (fs.existsSync(MODULES_FILE)) {
+      return JSON.parse(fs.readFileSync(MODULES_FILE, 'utf-8'));
+    }
+  } catch { /* ignore */ }
+  return {};
+}
+
+function writeModules(modules: Record<string, boolean>) {
+  ensureDataDir();
+  fs.writeFileSync(MODULES_FILE, JSON.stringify(modules, null, 2), 'utf-8');
+}
+
+// GET /admin/modules — anyone authenticated can read (teachers, students, parents need this)
+router.get('/modules', authenticate, async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const modules = readModules();
+    return res.json(successResponse(modules));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// PUT /admin/modules — only admin can write
+router.put('/modules', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const modules = req.body;
+    if (!modules || typeof modules !== 'object') {
+      throw new AppError('Invalid modules data', 400);
+    }
+    writeModules(modules);
+    return res.json(successResponse(modules, 'Modules saved'));
+  } catch (err) {
+    return next(err);
+  }
+});
+
 export default router;
