@@ -301,7 +301,8 @@ router.get('/my-grades', async (req, res, next) => {
     const student = Array.isArray(students) ? students[0] : null;
     if (!student) throw new AppError('Student not found', 404);
 
-    let gradesPath = `grades?student_id=eq.${student.id}&select=*,subjects(id,name,coefficient)&order=created_at.desc`;
+    // IMPORTANT: Inclure 'description' dans la sélection
+    let gradesPath = `grades?student_id=eq.${student.id}&select=*&order=created_at.desc`;
     if (period) gradesPath += `&period=eq.${period}`;
 
     const { data: grades } = await sbGet(gradesPath);
@@ -309,13 +310,278 @@ router.get('/my-grades', async (req, res, next) => {
       `schedule_slots?class_id=eq.${student.class_id}&is_active=eq.true&select=subject_id,subjects(id,name)`
     );
 
+        // Ajouter les subjects aux grades
+    const gradesWithSubjects = (grades || []).map((grade: any) => {
+      const slot = (slots || []).find((s: any) => s.subject_id === grade.subject_id);
+      return {
+        ...grade,
+        subjects: slot?.subjects || null
+      };
+    });
+
     res.json(successResponse({
       studentId: student.id,
       classId: student.class_id,
-      grades: Array.isArray(grades) ? grades : [],
-      scheduleSubjects: Array.isArray(slots) ? slots : [],
+      grades: gradesWithSubjects,
+      scheduleSubjects: slots || [],
     }));
   } catch (err) { next(err); }
+});
+
+// Dans student.routes.ts - Route GET /grades/bulletin/pdf
+
+router.get('/grades/bulletin/pdf', async (req, res, next) => {
+  try {
+    const { studentId, period, academicYearId } = req.query;
+    
+    if (!studentId || !period) {
+      throw new AppError('studentId et period sont requis', 400);
+    }
+
+    // Récupérer les données de l'étudiant
+    const studentRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/students?id=eq.${studentId}&select=*,profiles(first_name,last_name),classes(name)`,
+      { headers: H }
+    );
+    const student = (await studentRes.json())?.[0];
+    if (!student) throw new AppError('Étudiant non trouvé', 404);
+
+    // Récupérer les notes
+    const gradesRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/grades?student_id=eq.${studentId}&period=eq.${period}&select=*,subjects(id,name,coefficient)`,
+      { headers: H }
+    );
+    const grades = (await gradesRes.json()) as any[];
+
+    // Récupérer l'année scolaire
+    const academicYearRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/academic_years?is_active=eq.true&select=name`,
+      { headers: H }
+    );
+    const academicYears = (await academicYearRes.json()) as any[];
+    const academicYearName = academicYears[0]?.name || 'Année scolaire 2024/2025';
+
+    // Formatage de la période
+    const periodLabels: Record<string, string> = {
+      trimester_1: '1er Trimestre',
+      trimester_2: '2ème Trimestre',
+      trimester_3: '3ème Trimestre',
+    };
+    const periodLabel = periodLabels[period as string] || period;
+
+    // Grouper les notes par matière
+    const subjectMap = new Map();
+    grades.forEach(grade => {
+      const subject = grade.subjects;
+      if (!subjectMap.has(grade.subject_id)) {
+        subjectMap.set(grade.subject_id, {
+          name: subject?.name || 'Matière',
+          coefficient: subject?.coefficient || 1,
+          grades: [],
+          totalWeighted: 0,
+          totalCoeff: 0
+        });
+      }
+      const data = subjectMap.get(grade.subject_id);
+      const entry = {
+        title: grade.title || 'Note',
+        score: grade.score,
+        max_score: grade.max_score || 20,
+        coefficient: grade.coefficient || 1
+      };
+      data.grades.push(entry);
+      data.totalWeighted += (grade.score / (grade.max_score || 20)) * 20 * (grade.coefficient || 1);
+      data.totalCoeff += (grade.coefficient || 1);
+    });
+
+    // Calculer les moyennes par matière
+    const subjectsList = Array.from(subjectMap.values()).map(subject => ({
+      name: subject.name,
+      coefficient: subject.coefficient,
+      grades: subject.grades,
+      average: subject.totalCoeff > 0 ? subject.totalWeighted / subject.totalCoeff : 0
+    }));
+
+    // Calculer la moyenne générale
+    let totalWeighted = 0, totalCoeff = 0;
+    subjectsList.forEach(subject => {
+      totalWeighted += subject.average * subject.coefficient;
+      totalCoeff += subject.coefficient;
+    });
+    const generalAverage = totalCoeff > 0 ? totalWeighted / totalCoeff : 0;
+
+    // Créer le PDF
+    const doc = new PDFDocument({ margin: 40, size: 'A4' });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="bulletin_${period}.pdf"`);
+    doc.pipe(res);
+
+    const BLUE = '#3b82f6';
+    const LIGHT_BLUE = '#eff6ff';
+    const TEXT_DARK = '#1e293b';
+    const TEXT_MUTED = '#64748b';
+    const BORDER_COLOR = '#e2e8f0';
+    const pageWidth = doc.page.width;
+    let y = 40;
+
+    // ============ EN-TÊTE ============
+    // Logo à gauche (texte stylisé faute d'image)
+    doc.fontSize(18)
+      .font('Helvetica-Bold')
+      .fillColor(BLUE)
+      .text('OMNIA', 40, y);
+    doc.fontSize(8)
+      .font('Helvetica')
+      .fillColor(TEXT_MUTED)
+      .text('Plateforme éducative', 40, y + 18);
+
+    // Année scolaire à droite
+    doc.fontSize(10)
+      .font('Helvetica')
+      .fillColor(TEXT_MUTED)
+      .text(academicYearName, pageWidth - 40, y + 10, { align: 'right' });
+    
+    doc.fontSize(12)
+      .font('Helvetica-Bold')
+      .fillColor(TEXT_DARK)
+      .text(periodLabel, pageWidth - 40, y + 25, { align: 'right' });
+
+    y += 50;
+
+    // ============ TITRE ============
+    doc.fontSize(22)
+      .font('Helvetica-Bold')
+      .fillColor(TEXT_DARK)
+      .text('BULLETIN SCOLAIRE', 0, y, { align: 'center' });
+    
+    y += 40;
+
+    // ============ LIGNE DE SÉPARATION ============
+    doc.strokeColor(BORDER_COLOR)
+      .lineWidth(0.5)
+      .moveTo(40, y)
+      .lineTo(pageWidth - 40, y)
+      .stroke();
+    
+    y += 20;
+
+    // ============ TABLEAU ============
+    const tableX = 40;
+    const tableW = pageWidth - 80;
+    const rowH = 32;
+    
+    // Colonnes
+    const colMatiere = tableX + 12;
+    const colDetail = tableX + tableW * 0.32;
+    const colCoef = tableX + tableW * 0.72;
+    const colMoyenne = tableX + tableW * 0.85;
+
+    // En-tête du tableau
+    doc.rect(tableX, y, tableW, rowH).fill(LIGHT_BLUE);
+    doc.strokeColor(BORDER_COLOR)
+      .lineWidth(0.5)
+      .rect(tableX, y, tableW, rowH).stroke();
+
+    doc.fontSize(9)
+      .font('Helvetica-Bold')
+      .fillColor(BLUE)
+      .text('MATIÈRE', colMatiere, y + 11)
+      .text('DÉTAIL DES NOTES', colDetail, y + 11)
+      .text('COEF', colCoef, y + 11)
+      .text('MOYENNE', colMoyenne, y + 11);
+
+    y += rowH;
+
+    // Lignes des matières
+    subjectsList.forEach((subject, index) => {
+      // Vérifier la page
+      if (y + rowH > 750) {
+        doc.addPage();
+        y = 40;
+        
+        // Répéter l'en-tête
+        doc.rect(tableX, y, tableW, rowH).fill(LIGHT_BLUE);
+        doc.strokeColor(BORDER_COLOR).lineWidth(0.5).rect(tableX, y, tableW, rowH).stroke();
+        doc.fontSize(9).font('Helvetica-Bold').fillColor(BLUE)
+          .text('MATIÈRE', colMatiere, y + 11)
+          .text('DÉTAIL DES NOTES', colDetail, y + 11)
+          .text('COEF', colCoef, y + 11)
+          .text('MOYENNE', colMoyenne, y + 11);
+        y += rowH;
+      }
+
+      const bg = index % 2 === 0 ? '#ffffff' : '#f8fafc';
+      doc.rect(tableX, y, tableW, rowH).fill(bg);
+      
+      // Détail des notes (format: "Contrôle continu: 14/20 • Synthèse: 16/20")
+      const gradesDetail = subject.grades.map((g: any) => 
+        `${g.title}: ${g.score}/${g.max_score}`
+      ).join(' • ');
+
+      // Couleur de la moyenne
+      let avgColor = TEXT_DARK;
+      if (subject.average >= 14) avgColor = '#22c55e';
+      else if (subject.average >= 10) avgColor = '#f97316';
+      else avgColor = '#ef4444';
+
+      doc.fontSize(9)
+        .font('Helvetica')
+        .fillColor(TEXT_DARK)
+        .text(subject.name, colMatiere, y + 11)
+        .text(gradesDetail || '—', colDetail, y + 11, { width: tableW * 0.38 })
+        .text(`${subject.coefficient}`, colCoef, y + 11, { align: 'center' })
+        .fillColor(avgColor)
+        .font('Helvetica-Bold')
+        .text(`${subject.average.toFixed(2)}`, colMoyenne, y + 11, { align: 'center' });
+
+      // Bordure de ligne
+      doc.strokeColor(BORDER_COLOR)
+        .lineWidth(0.3)
+        .moveTo(tableX, y + rowH)
+        .lineTo(tableX + tableW, y + rowH)
+        .stroke();
+
+      y += rowH;
+    });
+
+    // ============ MOYENNE GÉNÉRALE ============
+    y += 10;
+    
+    doc.rect(tableX, y, tableW, rowH + 5).fill(LIGHT_BLUE);
+    doc.strokeColor(BORDER_COLOR)
+      .lineWidth(0.5)
+      .rect(tableX, y, tableW, rowH + 5).stroke();
+
+    let generalAvgColor = TEXT_DARK;
+    if (generalAverage >= 14) generalAvgColor = '#22c55e';
+    else if (generalAverage >= 10) generalAvgColor = '#f97316';
+    else generalAvgColor = '#ef4444';
+
+    doc.fontSize(11)
+      .font('Helvetica-Bold')
+      .fillColor(TEXT_DARK)
+      .text('MOYENNE GÉNÉRALE', colMatiere, y + 12)
+      .fillColor(generalAvgColor)
+      .text(`${generalAverage.toFixed(2)} / 20`, colMoyenne, y + 12, { align: 'center' });
+
+    y += rowH + 15;
+
+    // ============ PIED DE PAGE ============
+    doc.fontSize(7)
+      .font('Helvetica')
+      .fillColor(TEXT_MUTED)
+      .text(
+        `Document généré le ${new Date().toLocaleDateString('fr-FR')} à ${new Date().toLocaleTimeString('fr-FR')}`,
+        40,
+        doc.page.height - 40,
+        { width: pageWidth - 80, align: 'center' }
+      );
+
+    doc.end();
+  } catch (err) {
+    console.error('Erreur PDF:', err);
+    next(err);
+  }
 });
 
 // ─── GET /student/my-assignments ──────────────────────────────────────────────

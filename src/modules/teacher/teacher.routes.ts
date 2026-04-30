@@ -220,7 +220,7 @@ router.post('/grades', async (req, res, next) => {
       title:            req.body.title || type || 'Note',
       period:           period,
       grade_date:       req.body.gradeDate || new Date().toISOString().split('T')[0],
-      description:      comment || req.body.description || null,
+      description:      comment || req.body.description || req.body.appreciation || null,
     };
 
     const resInsert = await fetch(`${SUPABASE_URL}/rest/v1/grades`, {
@@ -258,6 +258,433 @@ router.post('/grades', async (req, res, next) => {
 
     res.status(201).json(successResponse(data, 'Note ajoutée avec succès'));
   } catch (err) { next(err); }
+});
+
+// =============================================================================
+// COMMENTAIRES / APPRÉCIATIONS SUR LES NOTES
+// =============================================================================
+router.post('/grades/comments', async (req, res, next) => {
+  try {
+    const teacherId = await getTeacherId(req.user!.id);
+    const { studentId, classId, subjectId, period, comment, academicYearId } = req.body;
+
+    if (!studentId || !classId || !subjectId || !period || !comment) {
+      throw new AppError('studentId, classId, subjectId, period et comment sont requis', 400);
+    }
+
+    // Chercher la note existante pour cet élève, cette matière, cette période
+    const searchUrl = `${SUPABASE_URL}/rest/v1/grades?student_id=eq.${studentId}&class_id=eq.${classId}&subject_id=eq.${subjectId}&period=eq.${period}&select=id`;
+    const searchRes = await fetch(searchUrl, { headers: H });
+    const existingGrades = (await searchRes.json()) as any[];
+
+    let result;
+    if (existingGrades && existingGrades.length > 0) {
+      // Mettre à jour la note existante avec le commentaire
+      const updateRes = await fetch(`${SUPABASE_URL}/rest/v1/grades?id=eq.${existingGrades[0].id}`, {
+        method: 'PATCH',
+        headers: { ...H, 'Prefer': 'return=representation' },
+        body: JSON.stringify({ description: comment })
+      });
+      const updateData = await updateRes.json();
+      result = updateData[0];
+    } else {
+      // Créer une nouvelle note juste avec le commentaire (sans note)
+      const insertRes = await fetch(`${SUPABASE_URL}/rest/v1/grades`, {
+        method: 'POST',
+        headers: { ...H, 'Prefer': 'return=representation' },
+        body: JSON.stringify({
+          teacher_id: teacherId,
+          student_id: studentId,
+          class_id: classId,
+          subject_id: subjectId,
+          academic_year_id: academicYearId || null,
+          period: period,
+          description: comment,
+          score: null,  // Pas de note, juste un commentaire
+          title: 'Appréciation'
+        })
+      });
+      const insertData = (await insertRes.json()) as any[];
+      result = insertData[0];
+    }
+
+    // Envoyer une notification à l'élève
+    const studentRes = await fetch(`${SUPABASE_URL}/rest/v1/students?id=eq.${studentId}&select=profile_id`, { headers: H });
+    const studentArr = (await studentRes.json()) as any[];
+    const studentProfileId = studentArr[0]?.profile_id;
+
+    if (studentProfileId) {
+      await createNotification({
+        recipientId: studentProfileId,
+        type: 'comment',
+        title: 'Nouvelle appréciation',
+        body: `Un professeur a ajouté une appréciation: "${comment.substring(0, 100)}"`,
+        data: { gradeId: result?.id }
+      });
+    }
+
+    res.status(201).json(successResponse(result, 'Appréciation ajoutée avec succès'));
+  } catch (err) {
+    next(err);
+  }
+});
+
+
+router.get('/grades/export-pdf', async (req, res, next) => {
+  try {
+    const teacherId = await getTeacherId(req.user!.id);
+    const { classId, subjectId, period, title } = req.query;
+
+    if (!classId || !subjectId || !period) {
+      throw new AppError('classId, subjectId et period sont requis', 400);
+    }
+
+    // 1. Infos classe
+    const classRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/classes?id=eq.${classId}&select=name`,
+      { headers: H }
+    );
+    const classData = (await classRes.json()) as any[];
+    const className = classData[0]?.name || `Classe ${classId}`;
+
+    // 2. Infos matière
+    const subjectRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/subjects?id=eq.${subjectId}&select=name`,
+      { headers: H }
+    );
+    const subjectData = (await subjectRes.json()) as any[];
+    const subjectName = subjectData[0]?.name || 'Matière';
+
+    // 3. Élèves de la classe
+    const studentsRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/students?class_id=eq.${classId}&select=id,student_number,profiles:profile_id(first_name,last_name)`,
+      { headers: H }
+    );
+    const students = (await studentsRes.json()) as any[];
+
+    // 4. Notes
+    const gradesRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/grades?teacher_id=eq.${teacherId}&class_id=eq.${classId}&subject_id=eq.${subjectId}&period=eq.${period}&select=student_id,score,max_score,title,description,grade_date`,
+      { headers: H }
+    );
+    const grades = (await gradesRes.json()) as any[];
+
+    if (!gradesRes.ok) {
+      throw new AppError('Erreur récupération des notes', 500);
+    }
+
+    // Récupération du nom du professeur
+    const teacherProfileRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/profiles?id=eq.${req.user!.id}&select=first_name,last_name`,
+      { headers: H }
+    );
+    const teacherProfile = (await teacherProfileRes.json()) as any[];
+    const teacherName = teacherProfile[0] 
+      ? `${teacherProfile[0].first_name} ${teacherProfile[0].last_name}`
+      : 'Professeur';
+
+    // Récupération de l'année scolaire
+    const academicYearRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/academic_years?is_active=eq.true&select=name,start_date,end_date`,
+      { headers: H }
+    );
+    const academicYears = (await academicYearRes.json()) as any[];
+    const academicYear = academicYears[0]?.name || 'Année scolaire 2024/2025';
+
+    const gradeMap = new Map(
+      grades.map((g: any) => [g.student_id, g])
+    );
+
+    // Formatage du trimestre
+    const periodLabels: Record<string, string> = {
+      trimester_1: '1er Trimestre',
+      trimester_2: '2ème Trimestre',
+      trimester_3: '3ème Trimestre',
+    };
+    const periodLabel = periodLabels[period as string] || period;
+
+    // 5. Générer le PDF
+    const doc = new PDFDocument({ margin: 0, size: 'A4' });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="fiche_notes_${className}_${period}.pdf"`
+    );
+    
+    doc.pipe(res);
+    
+    // Couleurs professionnelles
+    const DARK_BLUE = '#1a4d8c';        // Bleu foncé pour le titre et en-têtes
+    const LIGHT_BLUE_BG = '#eef2f7';    // Bleu très clair pour le fond des infos
+    const TEXT_DARK = '#1a1a2e';        // Texte principal
+    const TEXT_MUTED = '#4a5568';       // Texte secondaire
+    const BORDER_GRAY = '#cbd5e0';      // Bordures grises
+    const WHITE = '#ffffff';
+
+    const pageWidth = doc.page.width;
+    const pageHeight = doc.page.height;
+    
+    let y = 0;
+
+    // ============ BANDEAU TITRE (pleine largeur) ============
+    doc.rect(0, y, pageWidth, 120).fill(DARK_BLUE);
+    
+    doc.fontSize(28)
+      .font('Helvetica-Bold')
+      .fillColor(WHITE)
+      .text('FICHE DE NOTES', 0, 35, { align: 'center' });
+    
+    doc.fontSize(14)
+      .font('Helvetica')
+      .fillColor(WHITE)
+      .text('OMNIA', 0, 70, { align: 'center' });
+    
+    doc.fontSize(10)
+      .font('Helvetica')
+      .fillColor(WHITE)
+      .text(`${periodLabel} — ${academicYear}`, 0, 95, { align: 'center' });
+    
+    y = 140;
+    
+    // ============ CADRE INFORMATIONS (fond bleu clair, pas de bordure) ============
+    const infoY = y;
+    const infoHeight = 95;
+    
+    doc.rect(40, infoY, pageWidth - 80, infoHeight).fill(LIGHT_BLUE_BG);
+    
+    // Ligne de séparation sous le cadre
+    doc.strokeColor(BORDER_GRAY)
+      .lineWidth(0.5)
+      .moveTo(40, infoY + infoHeight)
+      .lineTo(pageWidth - 40, infoY + infoHeight)
+      .stroke();
+    
+    // Informations sur 2 colonnes avec les libellés à gauche et valeurs à droite
+    const leftColX = 60;
+    const rightColX = pageWidth / 2 + 30;
+    let infoRowY = infoY + 25;
+    
+    // Ligne 1 - Classe
+    doc.fontSize(9)
+      .font('Helvetica-Bold')
+      .fillColor(DARK_BLUE)
+      .text('CLASSE', leftColX, infoRowY);
+    doc.fontSize(11)
+      .font('Helvetica')
+      .fillColor(TEXT_DARK)
+      .text(`: ${className}`, leftColX + 50, infoRowY);
+    
+    // Ligne 1 - Période (colonne droite)
+    doc.fontSize(9)
+      .font('Helvetica-Bold')
+      .fillColor(DARK_BLUE)
+      .text('PÉRIODE', rightColX, infoRowY);
+    doc.fontSize(11)
+      .font('Helvetica')
+      .fillColor(TEXT_DARK)
+      .text(`: ${periodLabel}`, rightColX + 55, infoRowY);
+    
+    infoRowY += 28;
+    
+    // Ligne 2 - Matière
+    doc.fontSize(9)
+      .font('Helvetica-Bold')
+      .fillColor(DARK_BLUE)
+      .text('MATIÈRE', leftColX, infoRowY);
+    doc.fontSize(11)
+      .font('Helvetica')
+      .fillColor(TEXT_DARK)
+      .text(`: ${subjectName}`, leftColX + 50, infoRowY);
+    
+    // Ligne 2 - Évaluation (colonne droite)
+    doc.fontSize(9)
+      .font('Helvetica-Bold')
+      .fillColor(DARK_BLUE)
+      .text('ÉVALUATION', rightColX, infoRowY);
+    doc.fontSize(11)
+      .font('Helvetica')
+      .fillColor(TEXT_DARK)
+      .text(`: ${title || 'Contrôle continu'}`, rightColX + 55, infoRowY);
+    
+    infoRowY += 28;
+    
+    // Ligne 3 - Professeur
+    doc.fontSize(9)
+      .font('Helvetica-Bold')
+      .fillColor(DARK_BLUE)
+      .text('PROFESSEUR', leftColX, infoRowY);
+    doc.fontSize(11)
+      .font('Helvetica')
+      .fillColor(TEXT_DARK)
+      .text(`: ${teacherName}`, leftColX + 50, infoRowY);
+    
+    y = infoY + infoHeight + 20;
+    
+    // ============ TABLEAU ============
+    const tableX = 40;
+    const tableW = pageWidth - 80;
+    const rowH = 38;
+    
+    // Colonnes
+    const colStudent = tableX + 15;
+    const colGrade = tableX + tableW * 0.6;
+    const colRemark = tableX + tableW * 0.78;
+    
+    // En-tête du tableau (bleu foncé)
+    doc.rect(tableX, y, tableW, rowH).fill(DARK_BLUE);
+    
+    doc.fontSize(10)
+      .font('Helvetica-Bold')
+      .fillColor(WHITE)
+      .text('ÉLÈVE', colStudent, y + 13)
+      .text('NOTE /20', colGrade, y + 13)
+      .text('REMARQUE', colRemark, y + 13);
+    
+    y += rowH;
+    
+    // Lignes des élèves
+    const validScores: number[] = [];
+    
+    students
+      .sort((a: any, b: any) => {
+        const lastA = a.profiles?.last_name || '';
+        const lastB = b.profiles?.last_name || '';
+        return lastA.localeCompare(lastB, 'fr');
+      })
+      .forEach((student: any, index: number) => {
+        if (y + rowH > pageHeight - 110) {
+          doc.addPage();
+          y = 40;
+          
+          // Répéter l'en-tête
+          doc.rect(tableX, y, tableW, rowH).fill(DARK_BLUE);
+          doc.fontSize(10).font('Helvetica-Bold').fillColor(WHITE)
+            .text('ÉLÈVE', colStudent, y + 13)
+            .text('NOTE /20', colGrade, y + 13)
+            .text('REMARQUE', colRemark, y + 13);
+          y += rowH;
+        }
+        
+        const profile = student.profiles;
+        const fullName = `${profile?.last_name || ''} ${profile?.first_name || ''}`.trim();
+        const grade = gradeMap.get(student.id);
+        const score = grade ? Number(grade.score) : null;
+        
+        if (score !== null && !isNaN(score)) {
+          validScores.push(score);
+        }
+        
+        // Alternance des couleurs de lignes
+        const bg = index % 2 === 0 ? WHITE : '#f8fafc';
+        doc.rect(tableX, y, tableW, rowH).fill(bg);
+        
+        // Bordure entre les lignes
+        doc.strokeColor(BORDER_GRAY)
+          .lineWidth(0.3)
+          .moveTo(tableX, y + rowH)
+          .lineTo(tableX + tableW, y + rowH)
+          .stroke();
+        
+        // Nom de l'élève
+        doc.fontSize(10)
+          .font('Helvetica')
+          .fillColor(TEXT_DARK)
+          .text(fullName || '-', colStudent, y + 13);
+        
+        // Note
+        if (score !== null && !isNaN(score)) {
+          doc.fillColor(TEXT_DARK)
+            .fontSize(11)
+            .font('Helvetica-Bold')
+            .text(`${score.toFixed(2)} / 20`, colGrade, y + 13);
+        } else {
+          doc.fillColor(TEXT_MUTED)
+            .fontSize(10)
+            .font('Helvetica')
+            .text('—', colGrade, y + 13);
+        }
+        
+        // Remarque
+        doc.fillColor(TEXT_MUTED)
+          .fontSize(9)
+          .font('Helvetica')
+          .text(grade?.description || '-', colRemark, y + 13, { width: tableW * 0.18 });
+        
+        y += rowH;
+      });
+    
+    // ============ STATISTIQUES ============
+    y += 20;
+    
+    const avg = validScores.length > 0
+      ? (validScores.reduce((a, b) => a + b, 0) / validScores.length).toFixed(2)
+      : '—';
+    const maxNote = validScores.length > 0
+      ? Math.max(...validScores).toFixed(2)
+      : '—';
+    const minNote = validScores.length > 0
+      ? Math.min(...validScores).toFixed(2)
+      : '—';
+    
+    // Ligne de séparation
+    doc.strokeColor(BORDER_GRAY)
+      .lineWidth(0.5)
+      .moveTo(tableX, y)
+      .lineTo(tableX + tableW, y)
+      .stroke();
+    
+    y += 18;
+    
+    // Statistiques en 3 colonnes
+    const statWidth = (tableW - 60) / 3;
+    
+    doc.fontSize(9)
+      .font('Helvetica-Bold')
+      .fillColor(DARK_BLUE)
+      .text('MOYENNE DE LA CLASSE', tableX + 10, y);
+    doc.fontSize(16)
+      .font('Helvetica-Bold')
+      .fillColor(TEXT_DARK)
+      .text(`${avg}/20`, tableX + 10, y + 20);
+    doc.fontSize(8)
+      .font('Helvetica')
+      .fillColor(TEXT_MUTED)
+      .text(`${validScores.length} note(s)`, tableX + 10, y + 38);
+    
+    doc.fontSize(9)
+      .font('Helvetica-Bold')
+      .fillColor(DARK_BLUE)
+      .text('MEILLEURE NOTE', tableX + statWidth + 30, y);
+    doc.fontSize(16)
+      .font('Helvetica-Bold')
+      .fillColor(TEXT_DARK)
+      .text(`${maxNote}/20`, tableX + statWidth + 30, y + 20);
+    
+    doc.fontSize(9)
+      .font('Helvetica-Bold')
+      .fillColor(DARK_BLUE)
+      .text('NOTE LA PLUS BASSE', tableX + (statWidth + 30) * 2, y);
+    doc.fontSize(16)
+      .font('Helvetica-Bold')
+      .fillColor(TEXT_DARK)
+      .text(`${minNote}/20`, tableX + (statWidth + 30) * 2, y + 20);
+    
+    // ============ PIED DE PAGE ============
+    doc.fontSize(7)
+      .font('Helvetica')
+      .fillColor(TEXT_MUTED)
+      .text(
+        `Document généré le ${new Date().toLocaleDateString('fr-FR')} à ${new Date().toLocaleTimeString('fr-FR')}`,
+        40,
+        pageHeight - 35,
+        { width: pageWidth - 80, align: 'center' }
+      );
+    
+    doc.end();
+  } catch (err) { 
+    console.error('Erreur PDF:', err);
+    next(err); 
+  }
 });
 
 router.put('/grades/:gradeId', async (req, res, next) => {
@@ -551,7 +978,6 @@ router.patch('/submissions/:submissionId/grade', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ✅ CORRECTION: Route pour les commentaires (sans score)
 router.patch('/submissions/:submissionId/comment', async (req, res, next) => {
   try {
     const { submissionId } = req.params;
@@ -653,10 +1079,6 @@ router.patch('/submissions/:submissionId/comment', async (req, res, next) => {
 // PRÉSENCES (ATTENDANCE)
 // =============================================================================
 
-// ✅ IMPORTANT: Route GET /attendance/export-pdf DOIT être AVANT POST /attendance
-// =============================================================================
-// EXPORT PDF - FEUILLE D'APPEL
-// =============================================================================
 router.get('/attendance/export-pdf', async (req, res, next) => {
   try {
     const { classId, date } = req.query;
@@ -1156,7 +1578,7 @@ router.patch('/profile', async (req, res, next) => {
 });
 
 // =============================================================================
-// TÉLÉCHARGEMENT DE FICHIERS (travaux à faire, cours, compte-rendus, soumissions)
+// TÉLÉCHARGEMENT DE FICHIERS
 // =============================================================================
 router.get('/download-file', async (req, res, next) => {
   try {
@@ -1166,7 +1588,6 @@ router.get('/download-file', async (req, res, next) => {
       throw new AppError('URL parameter required', 400);
     }
 
-    // Autoriser les deux buckets : assignments (devoirs/cours) et submissions (travaux élèves)
     const allowedPrefixes = [
       `${SUPABASE_URL}/storage/v1/object/assignments/`,
       `${SUPABASE_URL}/storage/v1/object/submissions/`,
@@ -1204,11 +1625,6 @@ router.get('/download-file', async (req, res, next) => {
 
 const QR_SECRET = process.env.QR_JWT_SECRET || 'qr_fallback_secret_change_me';
 
-/**
- * POST /teacher/attendance/qr-session
- * Génère un token JWT signé valable 5 min pour le scan QR élève.
- * Body: { classId, subjectId?, date }
- */
 router.post('/attendance/qr-session', async (req, res, next) => {
   try {
     const jwt = await import('jsonwebtoken');
@@ -1238,7 +1654,6 @@ router.post('/attendance/qr-session', async (req, res, next) => {
     next(err);
   }
 });
-
 
 router.get('/my-notifications', async (req, res, next) => {
   try {
@@ -1304,4 +1719,5 @@ router.patch('/my-notifications/:id/read', async (req, res, next) => {
     next(err); 
   }
 });
+
 export default router;
