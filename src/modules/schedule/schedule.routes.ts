@@ -144,7 +144,31 @@ router.get('/teacher', authorize('teacher', 'admin'), async (req: Request, res: 
     if (academicYearId) url += `&academic_year_id=eq.${academicYearId}`;
 
     const { data } = await sbGet(url);
-    return res.json(successResponse(Array.isArray(data) ? data : []));
+    const arr = Array.isArray(data) ? data : [];
+
+    // Enrich with subjects, classes, and teacher profile
+    const subjectIds = [...new Set(arr.map((s: any) => s.subject_id).filter(Boolean))];
+    const classIds = [...new Set(arr.map((s: any) => s.class_id).filter(Boolean))];
+
+    let subjectsMap: Record<string, any> = {};
+    let classesMap: Record<string, any> = {};
+
+    if (subjectIds.length > 0) {
+      const { data: subs } = await sbGet(`subjects?id=in.(${subjectIds.join(',')})&select=id,name,code,color`);
+      (Array.isArray(subs) ? subs : []).forEach((s: any) => { subjectsMap[s.id] = s; });
+    }
+    if (classIds.length > 0) {
+      const { data: cls } = await sbGet(`classes?id=in.(${classIds.join(',')})&select=id,name,level,section`);
+      (Array.isArray(cls) ? cls : []).forEach((c: any) => { classesMap[c.id] = c; });
+    }
+
+    const enriched = arr.map((slot: any) => ({
+      ...slot,
+      subjects: subjectsMap[slot.subject_id] || null,
+      classes: classesMap[slot.class_id] || null,
+    }));
+
+    return res.json(successResponse(enriched));
   } catch (err) { return next(err); }
 });
 
