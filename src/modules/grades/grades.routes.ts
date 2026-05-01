@@ -382,213 +382,146 @@ router.get('/bulletin/pdf', async (req: Request, res: Response, next: NextFuncti
     });
 
     const pageW = doc.page.width - 80;
-    const blue = '#1E3A5F';
-    const lightBlue = '#4A90D9';
+    const blue = '#2563EB';
+    const titleBlue = '#2563EB';
+    const dark = '#1F2937';
     const gray = '#6B7280';
-    const lightGray = '#F3F4F6';
+    const lightGray = '#F9FAFB';
+    const border = '#E5E7EB';
+    const softBlue = '#EFF6FF';
 
-    // Header
-    doc.rect(0, 0, doc.page.width, 100).fill(blue);
-    doc.fontSize(22).fillColor('white').text('BULLETIN SCOLAIRE', 40, 25, { align: 'center' });
-    doc.fontSize(11).text(`${periodLabel} — ${new Date().getFullYear()}/${new Date().getFullYear() + 1}`, 40, 55, { align: 'center' });
-    doc.fontSize(9).fillColor('#A8C4E0').text('Établissement — School Management Platform', 40, 72, { align: 'center' });
-    doc.moveTo(0, 100).lineTo(doc.page.width, 100).strokeColor('#4A90D9').lineWidth(3).stroke();
+    const formatScore = (value: number) => Number(value || 0).toFixed(2);
+    const averageColor = (value: number) => value >= 14 ? '#16A34A' : value >= 10 ? '#F97316' : '#DC2626';
+    const getGradeText = (g: any) => `${g.title || 'Évaluation'}: ${g.score}/${g.max_score || 20}`;
 
-    // Student info card
-    const infoY = 120;
-    doc.roundedRect(40, infoY, pageW, 70, 8).fill(lightGray);
-    doc.fillColor(blue).fontSize(12);
-    doc.text(`Élève : ${(student as any).profiles?.first_name} ${(student as any).profiles?.last_name}`, 55, infoY + 12);
-    doc.fontSize(10).fillColor(gray);
-    doc.text(`Classe : ${(student as any).classes?.name || '-'}`, 55, infoY + 32);
-    doc.text(`N° : ${student.student_number || '-'}`, 55, infoY + 48);
+    // En-tête identique au formulaire: logo/plateforme à gauche, période/année à droite
+    const headerY = 38;
+    doc.fillColor(dark).font('Helvetica-Bold').fontSize(18).text('OMNIA', 40, headerY);
+    doc.fillColor('#9CA3AF').font('Helvetica').fontSize(8).text('Plateforme éducative', 40, headerY + 22);
 
-    const dateNaissance = (student as any).profiles?.date_of_birth
-      ? new Date((student as any).profiles.date_of_birth).toLocaleDateString('fr-FR')
-      : '-';
-    doc.text(`Né(e) le : ${dateNaissance}`, 300, infoY + 32);
-    doc.text(`Période : ${periodLabel}`, 300, infoY + 48);
+    doc.fillColor(dark).font('Helvetica-Bold').fontSize(10)
+      .text(periodLabel, 40, headerY, { width: pageW, align: 'right' });
+    doc.fillColor('#9CA3AF').font('Helvetica').fontSize(8)
+      .text('Année scolaire 2024/2025', 40, headerY + 18, { width: pageW, align: 'right' });
 
-    // Rank badge
-    if (rankNumber !== null) {
-      const badgeX = 40 + pageW - 95;
-      doc.roundedRect(badgeX, infoY + 8, 85, 50, 6).fill(blue);
-      doc.fillColor('white').fontSize(8).font('Helvetica-Bold')
-        .text('RANG', badgeX, infoY + 14, { width: 85, align: 'center' });
-      doc.fontSize(18)
-        .text(`${rankNumber}`, badgeX, infoY + 24, { width: 85, align: 'center' });
-      doc.fontSize(7).fillColor('#A8C4E0')
-        .text(`/ ${classSize} élèves`, badgeX, infoY + 46, { width: 85, align: 'center' });
-    }
+    doc.moveTo(40, 92).lineTo(40 + pageW, 92).strokeColor('#F3F4F6').lineWidth(1).stroke();
 
-    // Grades table
-    const tableY = infoY + 90;
-    const colX = [40, 220, 270, 350, 430];
+    // Titre bleu comme dans le formulaire
+    doc.fillColor(titleBlue).font('Helvetica-Bold').fontSize(16)
+      .text('BULLETIN SCOLAIRE', 40, 112, { width: pageW, align: 'center' });
 
-    doc.roundedRect(40, tableY, pageW, 28, 4).fill(blue);
-    doc.fillColor('white').fontSize(9).font('Helvetica-Bold');
-    doc.text('Matière', colX[0] + 8, tableY + 8);
-    doc.text('Coeff.', colX[1] + 4, tableY + 8);
-    doc.text('Moyenne', colX[2] + 4, tableY + 8);
-    doc.text('Appréciation', colX[3] + 4, tableY + 8);
-    doc.text('Détail', colX[4] + 4, tableY + 8);
+    // Informations rapides de l'élève, en style léger pour ne pas casser le visuel
+    const studentName = `${(student as any).profiles?.first_name || ''} ${(student as any).profiles?.last_name || ''}`.trim();
+    doc.fillColor(gray).font('Helvetica').fontSize(9)
+      .text(`Élève : ${studentName || '-'}`, 40, 144)
+      .text(`Classe : ${(student as any).classes?.name || '-'}`, 40, 160)
+      .text(`Période : ${periodLabel}`, 300, 144)
+      .text(`N° : ${student.student_number || '-'}`, 300, 160);
 
-    let currentY = tableY + 28;
-    doc.font('Helvetica');
+    // Tableau bulletin: même structure que le modal
+    let currentY = 195;
+    const tableX = 40;
+    const col = {
+      matiere: tableX,
+      coef: tableX + 150,
+      detail: tableX + 205,
+      moyenne: tableX + pageW - 85,
+    };
+    const width = {
+      matiere: 142,
+      coef: 45,
+      detail: pageW - 300,
+      moyenne: 80,
+    };
 
+    const drawTableHeader = () => {
+      doc.rect(tableX, currentY, pageW, 28).fill('white');
+      doc.moveTo(tableX, currentY + 28).lineTo(tableX + pageW, currentY + 28)
+        .strokeColor('#BFDBFE').lineWidth(1.5).stroke();
+      doc.fillColor(blue).font('Helvetica-Bold').fontSize(8);
+      doc.text('MATIÈRE', col.matiere, currentY + 10, { width: width.matiere });
+      doc.text('COEF', col.coef, currentY + 10, { width: width.coef, align: 'center' });
+      doc.text('DÉTAIL ÉVALUATION', col.detail, currentY + 10, { width: width.detail });
+      doc.text('MOYENNE', col.moyenne, currentY + 10, { width: width.moyenne, align: 'center' });
+      currentY += 28;
+    };
+
+    const ensureSpace = (needed: number) => {
+      if (currentY + needed > doc.page.height - 70) {
+        doc.addPage();
+        currentY = 50;
+        drawTableHeader();
+      }
+    };
+
+    drawTableHeader();
     subjects.sort((a, b) => a.name.localeCompare(b.name));
 
-    for (let i = 0; i < subjects.length; i++) {
-      const sub = subjects[i];
-      const rowH = 32;
+    for (const sub of subjects) {
+      const gradesLines = sub.grades && sub.grades.length > 0 ? sub.grades : [null];
+      const rowH = 24;
+      const subjectH = gradesLines.length * rowH;
+      ensureSpace(subjectH);
 
-      if (currentY + rowH > doc.page.height - 100) {
-        doc.addPage();
-        currentY = 60;
-      }
+      const subjectStartY = currentY;
+      doc.rect(tableX, subjectStartY, pageW, subjectH).fill('white');
 
-      if (i % 2 === 0) {
-        doc.rect(40, currentY, pageW, rowH).fill('#F9FAFB');
-      }
+      doc.fillColor(dark).font('Helvetica-Bold').fontSize(9)
+        .text(sub.name, col.matiere, subjectStartY + 8, { width: width.matiere });
+      doc.fillColor(gray).font('Helvetica').fontSize(9)
+        .text(String(sub.coefficient || 1), col.coef, subjectStartY + 8, { width: width.coef, align: 'center' });
+      doc.fillColor(averageColor(sub.average)).font('Helvetica-Bold').fontSize(9)
+        .text(`${formatScore(sub.average)}/20`, col.moyenne, subjectStartY + 8, { width: width.moyenne, align: 'center' });
 
-      doc.fillColor(blue).fontSize(9).font('Helvetica-Bold');
-      doc.text(sub.name, colX[0] + 8, currentY + 10, { width: 170 });
-
-      doc.fillColor(gray).fontSize(9).font('Helvetica');
-      doc.text(String(sub.coefficient), colX[1] + 12, currentY + 10);
-
-      const avg = sub.average;
-      const avgColor = avg >= 14 ? '#059669' : avg >= 10 ? '#D97706' : '#DC2626';
-      doc.fillColor(avgColor).fontSize(11).font('Helvetica-Bold');
-      doc.text(avg.toFixed(2) + '/20', colX[2] + 4, currentY + 9);
-
-      // Find comment by subject_id
-      const subComment = (comments || []).find((c: any) => c.subject_id === sub.subjectId);
-      doc.fillColor(gray).fontSize(7).font('Helvetica');
-      doc.text(subComment?.comment || '-', colX[3] + 4, currentY + 10, { width: 75 });
-
-      const detail = sub.grades.map((g: any) => `${g.title}: ${g.score}/${g.max_score || 20}`).join(', ');
-      doc.fillColor(gray).fontSize(7);
-      doc.text(detail, colX[4] + 4, currentY + 10, { width: pageW - 396 });
-
-      doc.moveTo(40, currentY + rowH).lineTo(40 + pageW, currentY + rowH).strokeColor('#E5E7EB').lineWidth(0.5).stroke();
-      currentY += rowH;
-    }
-
-    // General average + Rank card
-    currentY += 10;
-    if (currentY > doc.page.height - 200) { doc.addPage(); currentY = 60; }
-
-    doc.roundedRect(40, currentY, pageW * 0.58, 44, 6).fill(blue);
-    doc.fillColor('white').fontSize(12).font('Helvetica-Bold');
-    doc.text('MOYENNE GÉNÉRALE', 56, currentY + 13);
-    const avgColorGeneral = generalAvg >= 14 ? '#4ADE80' : generalAvg >= 10 ? '#FCD34D' : '#F87171';
-    doc.fillColor(avgColorGeneral).fontSize(17);
-    doc.text(generalAvg.toFixed(2) + ' / 20', 56, currentY + 11, { align: 'right', width: pageW * 0.58 - 32 });
-
-    if (rankNumber !== null) {
-      doc.roundedRect(40 + pageW * 0.62, currentY, pageW * 0.38, 44, 6).fill('#1E3A5F');
-      doc.fillColor('#A8C4E0').fontSize(8).font('Helvetica-Bold');
-      doc.text('CLASSEMENT', 40 + pageW * 0.62 + 8, currentY + 8, { width: pageW * 0.38 - 16, align: 'center' });
-      doc.fillColor('white').fontSize(16).font('Helvetica-Bold');
-      doc.text(`${rankNumber}e / ${classSize}`, 40 + pageW * 0.62 + 8, currentY + 20, { width: pageW * 0.38 - 16, align: 'center' });
-    }
-
-    currentY += 60;
-
-    // Evolution chart
-    const chartPoints = evolutionData.filter(d => d.avg !== null);
-    if (chartPoints.length > 0) {
-      if (currentY > doc.page.height - 200) { doc.addPage(); currentY = 60; }
-
-      const chartW = pageW;
-      const chartH = 100;
-      const chartX = 40;
-
-      doc.roundedRect(chartX, currentY, chartW, chartH + 30, 6).fill(lightGray);
-      doc.fillColor(blue).fontSize(9).font('Helvetica-Bold');
-      doc.text('ÉVOLUTION DES MOYENNES', chartX + 10, currentY + 8);
-
-      const gridY0 = currentY + 28 + chartH;
-      const gridY20 = currentY + 28;
-      const gridY10 = (gridY0 + gridY20) / 2;
-
-      doc.moveTo(chartX + 40, gridY20).lineTo(chartX + chartW - 20, gridY20).strokeColor('#D1D5DB').lineWidth(0.5).stroke();
-      doc.moveTo(chartX + 40, gridY10).lineTo(chartX + chartW - 20, gridY10).strokeColor('#D1D5DB').lineWidth(0.5).stroke();
-      doc.moveTo(chartX + 40, gridY0).lineTo(chartX + chartW - 20, gridY0).strokeColor('#D1D5DB').lineWidth(0.5).stroke();
-
-      doc.fillColor(gray).fontSize(7).font('Helvetica');
-      doc.text('20', chartX + 24, gridY20 - 4);
-      doc.text('10', chartX + 24, gridY10 - 4);
-      doc.text('0', chartX + 28, gridY0 - 4);
-
-      const periods = ['trimester_1', 'trimester_2', 'trimester_3'];
-      const periodShortLabels: Record<string, string> = { trimester_1: 'T1', trimester_2: 'T2', trimester_3: 'T3' };
-      const slotW = (chartW - 60) / 3;
-
-      const pointCoords: { x: number; y: number; avg: number; period: string }[] = [];
-      for (let i = 0; i < periods.length; i++) {
-        const pd = evolutionData.find(d => d.period === periods[i]);
-        if (pd && pd.avg !== null) {
-          const px = chartX + 40 + slotW * i + slotW / 2;
-          const py = gridY0 - ((pd.avg / 20) * chartH);
-          pointCoords.push({ x: px, y: py, avg: pd.avg, period: periods[i] });
+      gradesLines.forEach((g: any, index: number) => {
+        const y = subjectStartY + index * rowH;
+        doc.fillColor(gray).font('Helvetica').fontSize(8)
+          .text(g ? getGradeText(g) : '—', col.detail, y + 8, { width: width.detail });
+        if (index < gradesLines.length - 1) {
+          doc.moveTo(col.detail, y + rowH).lineTo(tableX + pageW, y + rowH)
+            .strokeColor('#F3F4F6').lineWidth(0.5).stroke();
         }
-        doc.fillColor(gray).fontSize(7).font('Helvetica');
-        doc.text(periodShortLabels[periods[i]], chartX + 40 + slotW * i + slotW / 2 - 6, gridY0 + 4);
-      }
+      });
 
-      for (let i = 0; i < pointCoords.length - 1; i++) {
-        doc.moveTo(pointCoords[i].x, pointCoords[i].y)
-           .lineTo(pointCoords[i + 1].x, pointCoords[i + 1].y)
-           .strokeColor(lightBlue).lineWidth(2).stroke();
-      }
-
-      for (const pt of pointCoords) {
-        const ptColor = pt.avg >= 14 ? '#059669' : pt.avg >= 10 ? '#D97706' : '#DC2626';
-        doc.circle(pt.x, pt.y, 7).fill('white');
-        doc.circle(pt.x, pt.y, 5).fill(ptColor);
-        doc.fillColor(ptColor).fontSize(8).font('Helvetica-Bold');
-        doc.text(pt.avg.toFixed(1), pt.x - 12, pt.y - 14, { width: 24, align: 'center' });
-      }
-
-      const currentPt = pointCoords.find(p => p.period === (period as string));
-      if (currentPt) {
-        doc.circle(currentPt.x, currentPt.y, 8).strokeColor(blue).lineWidth(1.5).stroke();
-      }
-
-      currentY += chartH + 40;
+      doc.moveTo(tableX, subjectStartY + subjectH).lineTo(tableX + pageW, subjectStartY + subjectH)
+        .strokeColor(border).lineWidth(0.6).stroke();
+      currentY += subjectH;
     }
 
-    // Teacher comments section
-    currentY += 10;
-    if (currentY > doc.page.height - 100) { doc.addPage(); currentY = 60; }
+    // Moyenne générale identique au pied de tableau du formulaire
+    ensureSpace(42);
+    doc.rect(tableX, currentY, pageW, 36).fill(softBlue);
+    doc.moveTo(tableX, currentY).lineTo(tableX + pageW, currentY).strokeColor('#BFDBFE').lineWidth(1.5).stroke();
+    doc.fillColor(dark).font('Helvetica-Bold').fontSize(10)
+      .text('Moyenne générale', tableX + 10, currentY + 12, { width: pageW - 120 });
+    doc.fillColor(averageColor(generalAvg)).font('Helvetica-Bold').fontSize(13)
+      .text(`${formatScore(generalAvg)}/20`, tableX, currentY + 10, { width: pageW - 10, align: 'right' });
+    currentY += 54;
 
+    // Appréciations en bas, comme demandé
     const subjectComments = (comments || []).filter((c: any) => c.subject_id);
     const generalComments = (comments || []).filter((c: any) => !c.subject_id);
     const allComments = [...subjectComments, ...generalComments];
 
     if (allComments.length > 0) {
-      doc.fillColor(blue).fontSize(11).font('Helvetica-Bold');
-      doc.text('Appréciations des enseignants', 40, currentY);
+      ensureSpace(45);
+      doc.fillColor(titleBlue).font('Helvetica-Bold').fontSize(11)
+        .text('Appréciations', tableX, currentY);
       currentY += 18;
 
       for (const c of allComments) {
-        if (currentY > doc.page.height - 100) { doc.addPage(); currentY = 60; }
+        ensureSpace(38);
         const teacherName = c.teachers?.profiles
           ? `${c.teachers.profiles.first_name} ${c.teachers.profiles.last_name}`
           : 'Enseignant';
         const subjectName = c.subjects?.name || 'Général';
-        const isPositive = c.is_positive !== false;
-        const accentColor = isPositive ? '#059669' : '#D97706';
 
-        doc.roundedRect(40, currentY, pageW, 36, 4).fill(lightGray);
-        doc.rect(40, currentY, 4, 36).fill(accentColor);
-        doc.fillColor(blue).fontSize(8).font('Helvetica-Bold');
-        doc.text(`${teacherName} — ${subjectName}`, 52, currentY + 6, { width: pageW - 20 });
-        doc.fillColor(gray).fontSize(8).font('Helvetica');
-        doc.text(c.comment, 52, currentY + 19, { width: pageW - 24 });
-        currentY += 42;
+        doc.roundedRect(tableX, currentY, pageW, 32, 6).fill(lightGray);
+        doc.fillColor(dark).font('Helvetica-Bold').fontSize(8)
+          .text(`${teacherName} — ${subjectName}`, tableX + 10, currentY + 7, { width: pageW - 20 });
+        doc.fillColor(gray).font('Helvetica').fontSize(8)
+          .text(c.comment || '-', tableX + 10, currentY + 19, { width: pageW - 20 });
+        currentY += 38;
       }
     }
 
