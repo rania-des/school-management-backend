@@ -22,6 +22,10 @@ export interface PredictOutput {
   riskLevel:       'low' | 'medium' | 'high';
   averageGrade:    number | null;
   attendanceRate:  number | null;
+  strongSubjects?: string[];
+  weakSubjects?:   string[];
+  trend?:          string;
+  nextGoal?:       string;
 }
 
 // ─── Helpers ──────────────────────────────────────────────
@@ -38,7 +42,7 @@ async function callOllama(prompt: string): Promise<string> {
         model:   OLLAMA_MODEL,
         prompt,
         stream:  false,
-        options: { temperature: 0.4, num_predict: 512 },
+        options: { temperature: 0.35, num_predict: 800 },
       }),
     });
 
@@ -79,7 +83,7 @@ export const aiService = {
     // ── 1. Fetch grades for this student ──────────────────
     const { data: gradesRaw, error: gradesErr } = await supabaseAdmin
       .from('grades')
-      .select('score, max_score, coefficient, subjects(name)')
+      .select('score, max_score, coefficient, created_at, subjects(name)')
       .eq('student_id', studentId)
       .order('created_at', { ascending: false })
       .limit(30);
@@ -92,6 +96,7 @@ export const aiService = {
       score: number;
       max_score: number;
       coefficient: number;
+      created_at: string;
       subjects: { name: string } | null;
     }>;
 
@@ -107,7 +112,37 @@ export const aiService = {
       ? Math.round((totalWeighted / totalWeight) * 100) / 100
       : null;
 
-    // ── 2. Fetch attendance ───────────────────────────────
+    // ── 2. Calculate trend ────────────────────────────────
+    const recentGrades = grades.slice(0, 5);
+    const olderGrades = grades.slice(5, 15);
+    const recentAvg = recentGrades.length > 0
+      ? recentGrades.reduce((s, g) => s + (g.score / g.max_score) * 20, 0) / recentGrades.length
+      : null;
+    const olderAvg = olderGrades.length > 0
+      ? olderGrades.reduce((s, g) => s + (g.score / g.max_score) * 20, 0) / olderGrades.length
+      : null;
+    const trend = recentAvg && olderAvg
+      ? recentAvg > olderAvg ? 'en hausse 📈' : recentAvg < olderAvg ? 'en baisse 📉' : 'stable ➡️'
+      : 'non déterminée';
+
+    // ── 3. Identify strong/weak subjects ─────────────────
+    const subjectAverages = new Map<string, number[]>();
+    for (const g of grades) {
+      const subName = g.subjects?.name || 'Matière';
+      const normalized = (g.score / (g.max_score || 20)) * 20;
+      if (!subjectAverages.has(subName)) subjectAverages.set(subName, []);
+      subjectAverages.get(subName)!.push(normalized);
+    }
+    
+    const strongSubjects: string[] = [];
+    const weakSubjects: string[] = [];
+    for (const [subject, scores] of subjectAverages.entries()) {
+      const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
+      if (avg >= 14) strongSubjects.push(subject);
+      if (avg < 10) weakSubjects.push(subject);
+    }
+
+    // ── 4. Fetch attendance ───────────────────────────────
     const { data: attendanceRaw } = await supabaseAdmin
       .from('attendance')
       .select('status')
@@ -123,7 +158,7 @@ export const aiService = {
       ? Math.round((presentCount / totalSessions) * 100)
       : null;
 
-    // ── 3. Determine risk level heuristically ─────────────
+    // ── 5. Determine risk level heuristically ─────────────
     let riskScore = 0;
     if (averageGrade !== null) {
       if (averageGrade < 8)  riskScore += 3;
@@ -135,12 +170,10 @@ export const aiService = {
       else if (attendanceRate < 85) riskScore += 1;
     }
     if (quizScore !== undefined) {
-      // quizScore is out of 5
       if (quizScore < 2) riskScore += 2;
       else if (quizScore < 3) riskScore += 1;
     }
     if (oralScore !== undefined) {
-      // oralScore is out of 10
       if (oralScore < 4) riskScore += 2;
       else if (oralScore < 6) riskScore += 1;
     }
@@ -148,7 +181,7 @@ export const aiService = {
     const riskLevel: 'low' | 'medium' | 'high' =
       riskScore >= 5 ? 'high' : riskScore >= 2 ? 'medium' : 'low';
 
-    // ── 4. Build LLM prompt ───────────────────────────────
+    // ── 6. Build LLM prompt ───────────────────────────────
     const gradesSummary = grades
       .slice(0, 10)
       .map((g) => `• ${g.subjects?.name || 'Matière'}: ${g.score}/${g.max_score || 20}`)
@@ -159,6 +192,7 @@ export const aiService = {
 
 Données de l'élève :
 - Moyenne générale : ${averageGrade !== null ? averageGrade + '/20' : 'Non disponible'}
+- Tendance : ${trend}
 - Taux de présence : ${attendanceRate !== null ? attendanceRate + '%' : 'Non disponible'}
 ${quizScore !== undefined ? `- Score quiz IA : ${quizScore}/5` : ''}
 ${oralScore !== undefined ? `- Score oral LLM : ${oralScore}/10` : ''}
@@ -166,13 +200,14 @@ ${oralScore !== undefined ? `- Score oral LLM : ${oralScore}/10` : ''}
 - Dernières notes :
 ${gradesSummary || '(Aucune note disponible)'}
 
-Réponds UNIQUEMENT en JSON valide, sans markdown :
-{"prediction":"Prédiction en 2-3 phrases.","recommendations":["conseil concret 1","conseil concret 2","conseil concret 3"]}`,
+Réponds UNIQUEMENT en JSON valide, sans texte autour :
+{"prediction":"Prédiction en 2-3 phrases.","recommendations":["conseil 1","conseil 2","conseil 3"],"strongSubjects":["matière forte 1"],"weakSubjects":["matière faible 1"],"nextGoal":"Objectif concret pour le prochain trimestre."}`,
 
       en: `You are an expert academic advisor. Analyze the student profile below and generate a personalized performance prediction.
 
 Student data:
 - Overall average: ${averageGrade !== null ? averageGrade + '/20' : 'N/A'}
+- Trend: ${trend === 'en hausse 📈' ? 'upward 📈' : trend === 'en baisse 📉' ? 'downward 📉' : 'stable ➡️'}
 - Attendance rate: ${attendanceRate !== null ? attendanceRate + '%' : 'N/A'}
 ${quizScore !== undefined ? `- AI quiz score: ${quizScore}/5` : ''}
 ${oralScore !== undefined ? `- LLM oral score: ${oralScore}/10` : ''}
@@ -181,32 +216,42 @@ ${oralScore !== undefined ? `- LLM oral score: ${oralScore}/10` : ''}
 ${gradesSummary || '(No grades available)'}
 
 Respond ONLY with valid JSON, no markdown:
-{"prediction":"2-3 sentence prediction.","recommendations":["concrete tip 1","concrete tip 2","concrete tip 3"]}`,
+{"prediction":"2-3 sentence prediction.","recommendations":["tip 1","tip 2","tip 3"],"strongSubjects":["strong subject 1"],"weakSubjects":["weak subject 1"],"nextGoal":"Concrete goal for next term."}`,
 
       ar: `أنت مستشار أكاديمي خبير. حلل الملف الدراسي أدناه وأنشئ توقعاً شخصياً للأداء.
 
 بيانات الطالب:
 - المعدل العام: ${averageGrade !== null ? averageGrade + '/20' : 'غير متاح'}
+- الاتجاه: ${trend === 'en hausse 📈' ? 'صاعد' : trend === 'en baisse 📉' ? 'هابط' : 'مستقر'}
 - نسبة الحضور: ${attendanceRate !== null ? attendanceRate + '%' : 'غير متاحة'}
 ${quizScore !== undefined ? `- درجة الاختبار: ${quizScore}/5` : ''}
 ${oralScore !== undefined ? `- الدرجة الشفهية: ${oralScore}/10` : ''}
 - مستوى الخطر: ${riskLevel}
 
 أجب بـ JSON صالح فقط، بدون markdown:
-{"prediction":"توقع في 2-3 جمل.","recommendations":["نصيحة 1","نصيحة 2","نصيحة 3"]}`,
+{"prediction":"توقع في 2-3 جمل.","recommendations":["نصيحة 1","نصيحة 2","نصيحة 3"],"strongSubjects":["مادة قوية"],"weakSubjects":["مادة ضعيفة"],"nextGoal":"هدف ملموس للفصل القادم"}`,
     };
 
     const prompt = langInstructions[language] || langInstructions.fr;
 
-    // ── 5. Call Ollama ────────────────────────────────────
+    // ── 7. Call Ollama ────────────────────────────────────
     const raw     = await callOllama(prompt);
-    const llmData = safeParseJson<{ prediction: string; recommendations: string[] }>(
+    const llmData = safeParseJson<{ 
+      prediction: string; 
+      recommendations: string[];
+      strongSubjects: string[];
+      weakSubjects: string[];
+      nextGoal: string;
+    }>(
       raw,
       {
         prediction: language === 'fr'
           ? 'Analyse disponible uniquement si Ollama est en ligne.'
           : 'Analysis available only if Ollama is running.',
         recommendations: [],
+        strongSubjects: strongSubjects,
+        weakSubjects: weakSubjects,
+        nextGoal: language === 'fr' ? 'Améliorer sa moyenne générale de 2 points' : 'Improve overall average by 2 points',
       }
     );
 
@@ -216,6 +261,10 @@ ${oralScore !== undefined ? `- الدرجة الشفهية: ${oralScore}/10` : '
       riskLevel,
       averageGrade,
       attendanceRate,
+      strongSubjects:  llmData.strongSubjects  || strongSubjects,
+      weakSubjects:    llmData.weakSubjects    || weakSubjects,
+      trend:           trend,
+      nextGoal:        llmData.nextGoal        || '',
     };
   },
 };

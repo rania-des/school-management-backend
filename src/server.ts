@@ -1,5 +1,5 @@
 import 'dotenv/config';
-
+import 'reflect-metadata';
 // 🔧 Fix ETIMEDOUT sur Windows — forcer IPv4 (Node 18+ préfère IPv6 par défaut)
 import { setDefaultResultOrder } from 'dns';
 setDefaultResultOrder('ipv4first');

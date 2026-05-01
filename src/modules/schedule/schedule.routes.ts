@@ -188,11 +188,26 @@ router.post('/', authorize('admin'), async (req: Request, res: Response, next: N
       }
     }
 
-    // Conflict check
+    // ✅ CORRIGÉ: Conflict check avec conversion en minutes pour éviter les bugs de comparaison de strings
     const { data: existing } = await sbGet(
-      `schedule_slots?class_id=eq.${body.classId}&day_of_week=eq.${body.dayOfWeek}&is_active=eq.true&start_time=lt.${body.endTime}&end_time=gt.${body.startTime}&select=id`
+      `schedule_slots?class_id=eq.${body.classId}&day_of_week=eq.${body.dayOfWeek}&is_active=eq.true&select=id,start_time,end_time`
     );
-    if (Array.isArray(existing) && existing.length > 0) {
+
+    const toMin = (t: string) => {
+      const [h, m] = t.split(':').map(Number);
+      return h * 60 + m;
+    };
+    
+    const newStart = toMin(body.startTime);
+    const newEnd = toMin(body.endTime);
+
+    const hasConflict = Array.isArray(existing) && existing.some((s: any) => {
+      const sStart = toMin(s.start_time);
+      const sEnd = toMin(s.end_time);
+      return newStart < sEnd && newEnd > sStart; // chevauchement strict
+    });
+
+    if (hasConflict) {
       throw new AppError('Schedule conflict detected for this class', 409);
     }
 

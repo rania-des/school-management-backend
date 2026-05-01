@@ -24,6 +24,8 @@ const gradeSchema = z.object({
   title: z.string().min(1).max(255),
   description: z.string().optional(),
   gradeDate: z.string().optional(),
+  comment: z.string().optional(),
+  isPositive: z.boolean().default(true),
 });
 
 router.get('/', async (req: Request, res: Response, next: NextFunction) => {
@@ -70,7 +72,8 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
 router.post('/', authorize('teacher', 'admin'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = gradeSchema.parse(req.body);
-    let teacherId = body.studentId;
+
+    let teacherId: string | null = null;
     if (req.user!.role === 'teacher') {
       const { data: teacher } = await supabaseAdmin.from('teachers').select('id').eq('profile_id', req.user!.id).single();
       if (!teacher) throw new AppError('Teacher not found', 404);
@@ -78,11 +81,16 @@ router.post('/', authorize('teacher', 'admin'), async (req: Request, res: Respon
     }
 
     const { data, error } = await supabaseAdmin.from('grades').insert({
-      student_id: body.studentId, subject_id: body.subjectId,
-      teacher_id: req.user!.role === 'teacher' ? teacherId : null,
-      class_id: body.classId, academic_year_id: body.academicYearId,
-      period: body.period, score: body.score, max_score: body.maxScore,
-      coefficient: body.coefficient, title: body.title,
+      student_id: body.studentId,
+      subject_id: body.subjectId,
+      teacher_id: teacherId,
+      class_id: body.classId,
+      academic_year_id: body.academicYearId,
+      period: body.period,
+      score: body.score,
+      max_score: body.maxScore,
+      coefficient: body.coefficient,
+      title: body.title,
       description: body.description,
       grade_date: body.gradeDate || new Date().toISOString().split('T')[0],
     }).select('*, subjects(name), students(profile_id, profiles(first_name, last_name))').single();
@@ -91,14 +99,43 @@ router.post('/', authorize('teacher', 'admin'), async (req: Request, res: Respon
 
     const studentProfileId = (data as any).students?.profile_id;
     if (studentProfileId) {
-      await createNotification({ recipientId: studentProfileId, type: 'grade', title: 'Nouvelle note', body: `Vous avez reçu ${body.score}/20 en ${(data as any).subjects?.name} - ${body.title}`, data: { gradeId: data.id, score: body.score } });
+      await createNotification({
+        recipientId: studentProfileId,
+        type: 'grade',
+        title: 'Nouvelle note',
+        body: `Vous avez reçu ${body.score}/20 en ${(data as any).subjects?.name} - ${body.title}`,
+        data: { gradeId: data.id, score: body.score }
+      });
       const parentProfileIds = await getStudentParentProfileIds(body.studentId);
       for (const parentId of parentProfileIds) {
-        await createNotification({ recipientId: parentId, type: 'grade', title: 'Nouvelle note', body: `Note de ${(data as any).students?.profiles?.first_name}: ${body.score}/20 en ${(data as any).subjects?.name}`, data: { gradeId: data.id } });
+        await createNotification({
+          recipientId: parentId,
+          type: 'grade',
+          title: 'Nouvelle note',
+          body: `Note de ${(data as any).students?.profiles?.first_name}: ${body.score}/20 en ${(data as any).subjects?.name}`,
+          data: { gradeId: data.id }
+        });
       }
     }
+
+    if (body.comment && body.comment.trim()) {
+      await supabaseAdmin.from('teacher_comments').insert({
+        teacher_id: teacherId,
+        student_id: body.studentId,
+        subject_id: body.subjectId,
+        class_id: body.classId,
+        academic_year_id: body.academicYearId,
+        period: body.period,
+        comment: body.comment.trim(),
+        is_positive: body.isPositive ?? true,
+      });
+    }
+
     return res.status(201).json(successResponse(data, 'Grade created'));
-  } catch (err) { return next(err); }
+  } catch (err) {
+    console.error('Erreur création note:', err);
+    return next(err);
+  }
 });
 
 router.get('/bulletin', async (req: Request, res: Response, next: NextFunction) => {
@@ -126,9 +163,11 @@ router.get('/bulletin', async (req: Request, res: Response, next: NextFunction) 
     });
     const generalAverage = totalWeight > 0 ? (totalWeightedScore / totalWeight).toFixed(2) : null;
 
+    // ✅ Requête commentaires corrigée
     const { data: comments } = await supabaseAdmin.from('teacher_comments')
       .select('*, subjects(name), teachers(profiles(first_name, last_name))')
-      .eq('student_id', studentId as string).eq('period', period as string)
+      .eq('student_id', studentId as string)
+      .eq('period', period as string)
       .eq('academic_year_id', academicYearId as string);
 
     const { data: studentData } = await supabaseAdmin.from('students').select('class_id').eq('id', studentId as string).single();
@@ -211,7 +250,7 @@ router.get('/bulletin', async (req: Request, res: Response, next: NextFunction) 
 });
 
 router.get('/bulletin/pdf', async (req: Request, res: Response, next: NextFunction) => {
-  console.log('🔴🔴🔴 PDF GENERATION STARTED - CORRECTED VERSION 🔴🔴🔴');
+  console.log('🔴🔴🔴 PDF GENERATION STARTED 🔴🔴🔴');
   console.log('Query params:', req.query);
   
   try {
@@ -242,7 +281,6 @@ router.get('/bulletin/pdf', async (req: Request, res: Response, next: NextFuncti
       .eq('student_id', studentId as string).eq('period', period as string)
       .order('created_at', { ascending: true });
 
-    // Récupérer academic_year_id depuis le paramètre ou depuis les grades
     const academicYearId: string | null = 
       (academicYearIdParam as string) ||
       ((grades && grades.length > 0) ? (grades[0] as any).academic_year_id ?? null : null);
@@ -250,7 +288,7 @@ router.get('/bulletin/pdf', async (req: Request, res: Response, next: NextFuncti
     console.log('📅 academicYearId:', academicYearId);
     console.log('🎓 grades count:', grades?.length || 0);
 
-    // Group by subject - with subjectId
+    // Group by subject
     const subjectMap = new Map<string, { name: string; subjectId: string; coefficient: number; grades: any[] }>();
     for (const g of (grades || [])) {
       const subId = g.subject_id;
@@ -279,21 +317,21 @@ router.get('/bulletin/pdf', async (req: Request, res: Response, next: NextFuncti
 
     const generalAvg = totalCoeff > 0 ? totalWeighted / totalCoeff : 0;
 
-    // Fetch comments - avec fallback pour les commentaires sans period (NULL)
+    // ✅ Commentaires - récupération simple et directe
     const { data: comments } = await supabaseAdmin.from('teacher_comments')
       .select('*, subjects(name), teachers(profiles(first_name, last_name))')
       .eq('student_id', studentId as string)
-      .or(`period.eq.${period},period.is.null`);
+      .eq('period', period as string)
+      .eq('academic_year_id', academicYearId as string);
 
-    console.log('💬 COMMENTS:', JSON.stringify(comments?.map((c: any) => ({
-      id: c.id, 
-      subject_id: c.subject_id, 
-      period: c.period,
-      subjects: c.subjects, 
-      comment: c.comment
-    }))));
+    console.log('📝 COMMENTAIRES trouvés:', comments?.length || 0);
+    if (comments && comments.length > 0) {
+      comments.forEach((c: any) => {
+        console.log(`  - ${c.subjects?.name || 'Général'}: ${c.comment?.substring(0, 50)}`);
+      });
+    }
 
-    // Fetch class ranking and evolution data
+    // Fetch class ranking
     const { data: studentInfo } = await supabaseAdmin
       .from('students').select('class_id').eq('id', studentId as string).single();
 
@@ -362,13 +400,8 @@ router.get('/bulletin/pdf', async (req: Request, res: Response, next: NextFuncti
       }
     }
 
-    console.log('🔥 RANK CALCULATED:', { rankNumber, classSize });
-    console.log('📊 EVOLUTION DATA:', evolutionData);
-
-    // Period label
     const periodLabels: Record<string, string> = {
       trimester_1: '1er Trimestre', trimester_2: '2ème Trimestre', trimester_3: '3ème Trimestre',
-      semester_1: '1er Semestre', semester_2: '2ème Semestre', annual: 'Annuel',
     };
     const periodLabel = periodLabels[period as string] || (period as string);
 
@@ -382,146 +415,252 @@ router.get('/bulletin/pdf', async (req: Request, res: Response, next: NextFuncti
     });
 
     const pageW = doc.page.width - 80;
-    const blue = '#2563EB';
-    const titleBlue = '#2563EB';
-    const dark = '#1F2937';
+    const blueDark = '#60A5FA';
+    const blueLight = '#93C5FD';
+    const textDark = '#1E4078';
     const gray = '#6B7280';
-    const lightGray = '#F9FAFB';
-    const border = '#E5E7EB';
-    const softBlue = '#EFF6FF';
+    const lightGray = '#F3F4F6';
 
-    const formatScore = (value: number) => Number(value || 0).toFixed(2);
-    const averageColor = (value: number) => value >= 14 ? '#16A34A' : value >= 10 ? '#F97316' : '#DC2626';
-    const getGradeText = (g: any) => `${g.title || 'Évaluation'}: ${g.score}/${g.max_score || 20}`;
+    // =============================================================
+    // HEADER AVEC LOGO EN CERCLE BLANC
+    // =============================================================
+    doc.rect(0, 0, doc.page.width, 65).fill(blueDark);
 
-    // En-tête identique au formulaire: logo/plateforme à gauche, période/année à droite
-    const headerY = 38;
-    doc.fillColor(dark).font('Helvetica-Bold').fontSize(18).text('OMNIA', 40, headerY);
-    doc.fillColor('#9CA3AF').font('Helvetica').fontSize(8).text('Plateforme éducative', 40, headerY + 22);
+    doc.circle(57, 32, 18).fill('white');
 
-    doc.fillColor(dark).font('Helvetica-Bold').fontSize(10)
-      .text(periodLabel, 40, headerY, { width: pageW, align: 'right' });
-    doc.fillColor('#9CA3AF').font('Helvetica').fontSize(8)
-      .text('Année scolaire 2024/2025', 40, headerY + 18, { width: pageW, align: 'right' });
+    doc.fillColor(textDark)
+       .fontSize(7)
+       .font('Helvetica-Bold')
+       .text('OMNIA', 39, 28, { width: 36, align: 'center' });
 
-    doc.moveTo(40, 92).lineTo(40 + pageW, 92).strokeColor('#F3F4F6').lineWidth(1).stroke();
+    doc.fillColor('white')
+       .fontSize(16)
+       .font('Helvetica-Bold')
+       .text('BULLETIN SCOLAIRE', 80, 18, { width: doc.page.width - 120, align: 'center' });
 
-    // Titre bleu comme dans le formulaire
-    doc.fillColor(titleBlue).font('Helvetica-Bold').fontSize(16)
-      .text('BULLETIN SCOLAIRE', 40, 112, { width: pageW, align: 'center' });
+    doc.fillColor('#A8C4E0')
+       .fontSize(9)
+       .font('Helvetica')
+       .text(
+         `${periodLabel} — ${new Date().getFullYear()}/${new Date().getFullYear() + 1}`,
+         80, 38, { width: doc.page.width - 120, align: 'center' }
+       );
 
-    // Informations rapides de l'élève, en style léger pour ne pas casser le visuel
-    const studentName = `${(student as any).profiles?.first_name || ''} ${(student as any).profiles?.last_name || ''}`.trim();
-    doc.fillColor(gray).font('Helvetica').fontSize(9)
-      .text(`Élève : ${studentName || '-'}`, 40, 144)
-      .text(`Classe : ${(student as any).classes?.name || '-'}`, 40, 160)
-      .text(`Période : ${periodLabel}`, 300, 144)
-      .text(`N° : ${student.student_number || '-'}`, 300, 160);
+    doc.moveTo(0, 65).lineTo(doc.page.width, 65).strokeColor(blueLight).lineWidth(2).stroke();
 
-    // Tableau bulletin: même structure que le modal
-    let currentY = 195;
-    const tableX = 40;
-    const col = {
-      matiere: tableX,
-      coef: tableX + 150,
-      detail: tableX + 205,
-      moyenne: tableX + pageW - 85,
-    };
-    const width = {
-      matiere: 142,
-      coef: 45,
-      detail: pageW - 300,
-      moyenne: 80,
-    };
+    // Student info card
+    const infoY = 80;
+    doc.roundedRect(40, infoY, pageW, 70, 8).fill(lightGray);
+    doc.fillColor(textDark).fontSize(12);
+    doc.text(`Élève : ${(student as any).profiles?.first_name} ${(student as any).profiles?.last_name}`, 55, infoY + 12);
+    doc.fontSize(10).fillColor(gray);
+    doc.text(`Classe : ${(student as any).classes?.name || '-'}`, 55, infoY + 32);
+    doc.text(`N° : ${student.student_number || '-'}`, 55, infoY + 48);
 
-    const drawTableHeader = () => {
-      doc.rect(tableX, currentY, pageW, 28).fill('white');
-      doc.moveTo(tableX, currentY + 28).lineTo(tableX + pageW, currentY + 28)
-        .strokeColor('#BFDBFE').lineWidth(1.5).stroke();
-      doc.fillColor(blue).font('Helvetica-Bold').fontSize(8);
-      doc.text('MATIÈRE', col.matiere, currentY + 10, { width: width.matiere });
-      doc.text('COEF', col.coef, currentY + 10, { width: width.coef, align: 'center' });
-      doc.text('DÉTAIL ÉVALUATION', col.detail, currentY + 10, { width: width.detail });
-      doc.text('MOYENNE', col.moyenne, currentY + 10, { width: width.moyenne, align: 'center' });
-      currentY += 28;
-    };
+    const dateNaissance = (student as any).profiles?.date_of_birth
+      ? new Date((student as any).profiles.date_of_birth).toLocaleDateString('fr-FR')
+      : '-';
+    doc.text(`Né(e) le : ${dateNaissance}`, 280, infoY + 32);
+    doc.text(`Période : ${periodLabel}`, 280, infoY + 48);
 
-    const ensureSpace = (needed: number) => {
-      if (currentY + needed > doc.page.height - 70) {
-        doc.addPage();
-        currentY = 50;
-        drawTableHeader();
-      }
-    };
-
-    drawTableHeader();
-    subjects.sort((a, b) => a.name.localeCompare(b.name));
-
-    for (const sub of subjects) {
-      const gradesLines = sub.grades && sub.grades.length > 0 ? sub.grades : [null];
-      const rowH = 24;
-      const subjectH = gradesLines.length * rowH;
-      ensureSpace(subjectH);
-
-      const subjectStartY = currentY;
-      doc.rect(tableX, subjectStartY, pageW, subjectH).fill('white');
-
-      doc.fillColor(dark).font('Helvetica-Bold').fontSize(9)
-        .text(sub.name, col.matiere, subjectStartY + 8, { width: width.matiere });
-      doc.fillColor(gray).font('Helvetica').fontSize(9)
-        .text(String(sub.coefficient || 1), col.coef, subjectStartY + 8, { width: width.coef, align: 'center' });
-      doc.fillColor(averageColor(sub.average)).font('Helvetica-Bold').fontSize(9)
-        .text(`${formatScore(sub.average)}/20`, col.moyenne, subjectStartY + 8, { width: width.moyenne, align: 'center' });
-
-      gradesLines.forEach((g: any, index: number) => {
-        const y = subjectStartY + index * rowH;
-        doc.fillColor(gray).font('Helvetica').fontSize(8)
-          .text(g ? getGradeText(g) : '—', col.detail, y + 8, { width: width.detail });
-        if (index < gradesLines.length - 1) {
-          doc.moveTo(col.detail, y + rowH).lineTo(tableX + pageW, y + rowH)
-            .strokeColor('#F3F4F6').lineWidth(0.5).stroke();
-        }
-      });
-
-      doc.moveTo(tableX, subjectStartY + subjectH).lineTo(tableX + pageW, subjectStartY + subjectH)
-        .strokeColor(border).lineWidth(0.6).stroke();
-      currentY += subjectH;
+    // Rank badge
+    if (rankNumber !== null) {
+      const badgeX = 40 + pageW - 95;
+      doc.roundedRect(badgeX, infoY + 8, 85, 50, 6).fill(blueDark);
+      doc.fillColor('white').fontSize(8).font('Helvetica-Bold')
+        .text('RANG', badgeX, infoY + 14, { width: 85, align: 'center' });
+      doc.fontSize(18)
+        .text(`${rankNumber}`, badgeX, infoY + 24, { width: 85, align: 'center' });
+      doc.fontSize(7).fillColor('#A8C4E0')
+        .text(`/ ${classSize} élèves`, badgeX, infoY + 46, { width: 85, align: 'center' });
     }
 
-    // Moyenne générale identique au pied de tableau du formulaire
-    ensureSpace(42);
-    doc.rect(tableX, currentY, pageW, 36).fill(softBlue);
-    doc.moveTo(tableX, currentY).lineTo(tableX + pageW, currentY).strokeColor('#BFDBFE').lineWidth(1.5).stroke();
-    doc.fillColor(dark).font('Helvetica-Bold').fontSize(10)
-      .text('Moyenne générale', tableX + 10, currentY + 12, { width: pageW - 120 });
-    doc.fillColor(averageColor(generalAvg)).font('Helvetica-Bold').fontSize(13)
-      .text(`${formatScore(generalAvg)}/20`, tableX, currentY + 10, { width: pageW - 10, align: 'right' });
-    currentY += 54;
+    // Grades table
+    const tableY = infoY + 90;
+    const colX = [40, 220, 270, 350, 430];
 
-    // Appréciations en bas, comme demandé
-    const subjectComments = (comments || []).filter((c: any) => c.subject_id);
-    const generalComments = (comments || []).filter((c: any) => !c.subject_id);
-    const allComments = [...subjectComments, ...generalComments];
+    doc.roundedRect(40, tableY, pageW, 28, 4).fill(blueDark);
+    doc.fillColor('white').fontSize(9).font('Helvetica-Bold');
+    doc.text('Matière', colX[0] + 8, tableY + 8);
+    doc.text('Coeff.', colX[1] + 4, tableY + 8);
+    doc.text('Moyenne', colX[2] + 4, tableY + 8);
+    doc.text('Appréciation', colX[3] + 4, tableY + 8);
+    doc.text('Détail', colX[4] + 4, tableY + 8);
 
-    if (allComments.length > 0) {
-      ensureSpace(45);
-      doc.fillColor(titleBlue).font('Helvetica-Bold').fontSize(11)
-        .text('Appréciations', tableX, currentY);
+    let currentY = tableY + 28;
+    doc.font('Helvetica');
+
+    subjects.sort((a, b) => a.name.localeCompare(b.name));
+
+    for (let i = 0; i < subjects.length; i++) {
+      const sub = subjects[i];
+      const rowH = 32;
+
+      if (currentY + rowH > doc.page.height - 100) {
+        doc.addPage();
+        currentY = 60;
+        doc.roundedRect(40, currentY, pageW, 28, 4).fill(blueDark);
+        doc.fillColor('white').fontSize(9).font('Helvetica-Bold');
+        doc.text('Matière', colX[0] + 8, currentY + 8);
+        doc.text('Coeff.', colX[1] + 4, currentY + 8);
+        doc.text('Moyenne', colX[2] + 4, currentY + 8);
+        doc.text('Appréciation', colX[3] + 4, currentY + 8);
+        doc.text('Détail', colX[4] + 4, currentY + 8);
+        currentY += 28;
+      }
+
+      if (i % 2 === 0) {
+        doc.rect(40, currentY, pageW, rowH).fill('#F9FAFB');
+      }
+
+      doc.fillColor(textDark).fontSize(9).font('Helvetica-Bold');
+      doc.text(sub.name, colX[0] + 8, currentY + 10, { width: 170 });
+
+      doc.fillColor(gray).fontSize(9).font('Helvetica');
+      doc.text(String(sub.coefficient), colX[1] + 12, currentY + 10);
+
+      const avg = sub.average;
+      const avgColor = avg >= 14 ? '#059669' : avg >= 10 ? '#D97706' : '#DC2626';
+      doc.fillColor(avgColor).fontSize(11).font('Helvetica-Bold');
+      doc.text(avg.toFixed(2) + '/20', colX[2] + 4, currentY + 9);
+
+      const subComment = (comments || []).find((c: any) => c.subject_id === sub.subjectId);
+      doc.fillColor(gray).fontSize(7).font('Helvetica');
+      doc.text(subComment?.comment || '-', colX[3] + 4, currentY + 10, { width: 75 });
+
+      const detail = sub.grades.map((g: any) => `${g.title}: ${g.score}/${g.max_score || 20}`).join(', ');
+      doc.fillColor(gray).fontSize(7);
+      doc.text(detail, colX[4] + 4, currentY + 10, { width: pageW - 396 });
+
+      doc.moveTo(40, currentY + rowH).lineTo(40 + pageW, currentY + rowH).strokeColor('#E5E7EB').lineWidth(0.5).stroke();
+      currentY += rowH;
+    }
+
+    // General average
+    currentY += 10;
+    if (currentY > doc.page.height - 100) { doc.addPage(); currentY = 60; }
+
+    doc.roundedRect(40, currentY, pageW, 44, 6).fill(blueDark);
+    doc.fillColor('white').fontSize(12).font('Helvetica-Bold');
+    doc.text('MOYENNE GÉNÉRALE', 56, currentY + 13);
+    const avgColorGeneral = generalAvg >= 14 ? '#4ADE80' : generalAvg >= 10 ? '#FCD34D' : '#F87171';
+    doc.fillColor(avgColorGeneral).fontSize(17);
+    doc.text(generalAvg.toFixed(2) + ' / 20', 56, currentY + 11, { align: 'right', width: pageW - 32 });
+
+    // =============================================================
+    // GRAPHE D'ÉVOLUTION
+    // =============================================================
+    currentY += 60;
+
+    const chartPoints = evolutionData.filter(d => d.avg !== null);
+    if (chartPoints.length > 0) {
+      if (currentY > doc.page.height - 200) { doc.addPage(); currentY = 60; }
+
+      const chartW = pageW;
+      const chartH = 100;
+      const chartX = 40;
+
+      doc.roundedRect(chartX, currentY, chartW, chartH + 30, 6).fill(lightGray);
+      doc.fillColor(blueDark).fontSize(9).font('Helvetica-Bold');
+      doc.text('ÉVOLUTION DES MOYENNES', chartX + 10, currentY + 8);
+
+      const gridY0  = currentY + 28 + chartH;
+      const gridY20 = currentY + 28;
+      const gridY10 = (gridY0 + gridY20) / 2;
+
+      doc.moveTo(chartX + 40, gridY20).lineTo(chartX + chartW - 20, gridY20)
+         .strokeColor('#D1D5DB').lineWidth(0.5).stroke();
+      doc.moveTo(chartX + 40, gridY10).lineTo(chartX + chartW - 20, gridY10)
+         .strokeColor('#D1D5DB').lineWidth(0.5).stroke();
+      doc.moveTo(chartX + 40, gridY0).lineTo(chartX + chartW - 20, gridY0)
+         .strokeColor('#D1D5DB').lineWidth(0.5).stroke();
+
+      doc.fillColor(gray).fontSize(7).font('Helvetica');
+      doc.text('20', chartX + 24, gridY20 - 4);
+      doc.text('10', chartX + 24, gridY10 - 4);
+      doc.text('0',  chartX + 28, gridY0  - 4);
+
+      const periods = ['trimester_1', 'trimester_2', 'trimester_3'];
+      const periodShortLabels: Record<string, string> = {
+        trimester_1: 'T1', trimester_2: 'T2', trimester_3: 'T3',
+      };
+      const slotW = (chartW - 60) / 3;
+
+      const pointCoords: { x: number; y: number; avg: number; period: string }[] = [];
+      for (let i = 0; i < periods.length; i++) {
+        const pd = evolutionData.find(d => d.period === periods[i]);
+        if (pd && pd.avg !== null) {
+          const px = chartX + 40 + slotW * i + slotW / 2;
+          const py = gridY0 - ((pd.avg / 20) * chartH);
+          pointCoords.push({ x: px, y: py, avg: pd.avg, period: periods[i] });
+        }
+        doc.fillColor(gray).fontSize(7).font('Helvetica');
+        doc.text(
+          periodShortLabels[periods[i]],
+          chartX + 40 + slotW * i + slotW / 2 - 6,
+          gridY0 + 4
+        );
+      }
+
+      for (let i = 0; i < pointCoords.length - 1; i++) {
+        doc.moveTo(pointCoords[i].x, pointCoords[i].y)
+           .lineTo(pointCoords[i + 1].x, pointCoords[i + 1].y)
+           .strokeColor(blueLight).lineWidth(2).stroke();
+      }
+
+      for (const pt of pointCoords) {
+        const ptColor = pt.avg >= 14 ? '#059669' : pt.avg >= 10 ? '#D97706' : '#DC2626';
+        doc.circle(pt.x, pt.y, 7).fill('white');
+        doc.circle(pt.x, pt.y, 5).fill(ptColor);
+        doc.fillColor(ptColor).fontSize(8).font('Helvetica-Bold');
+        doc.text(pt.avg.toFixed(1), pt.x - 12, pt.y - 14, { width: 24, align: 'center' });
+      }
+
+      const currentPt = pointCoords.find(p => p.period === (period as string));
+      if (currentPt) {
+        doc.circle(currentPt.x, currentPt.y, 8)
+           .strokeColor(blueDark).lineWidth(1.5).stroke();
+      }
+
+      currentY += chartH + 40;
+    }
+
+    // =============================================================
+    // SECTION COMMENTAIRES DES ENSEIGNANTS (CORRIGÉE)
+    // =============================================================
+    currentY += 10;
+    if (currentY > doc.page.height - 100) { doc.addPage(); currentY = 60; }
+
+    // Utiliser directement tous les commentaires récupérés
+    const allTeacherComments = comments || [];
+
+    if (allTeacherComments.length > 0) {
+      doc.fillColor(textDark).fontSize(11).font('Helvetica-Bold');
+      doc.text('Appréciations des enseignants', 40, currentY);
       currentY += 18;
 
-      for (const c of allComments) {
-        ensureSpace(38);
+      for (const c of allTeacherComments) {
+        if (currentY > doc.page.height - 100) { doc.addPage(); currentY = 60; }
+
         const teacherName = c.teachers?.profiles
           ? `${c.teachers.profiles.first_name} ${c.teachers.profiles.last_name}`
           : 'Enseignant';
         const subjectName = c.subjects?.name || 'Général';
+        const isPositive = c.is_positive !== false;
+        const accentColor = isPositive ? '#059669' : '#D97706';
 
-        doc.roundedRect(tableX, currentY, pageW, 32, 6).fill(lightGray);
-        doc.fillColor(dark).font('Helvetica-Bold').fontSize(8)
-          .text(`${teacherName} — ${subjectName}`, tableX + 10, currentY + 7, { width: pageW - 20 });
-        doc.fillColor(gray).font('Helvetica').fontSize(8)
-          .text(c.comment || '-', tableX + 10, currentY + 19, { width: pageW - 20 });
-        currentY += 38;
+        doc.roundedRect(40, currentY, pageW, 36, 4).fill(lightGray);
+        doc.rect(40, currentY, 4, 36).fill(accentColor);
+
+        doc.fillColor(textDark).fontSize(8).font('Helvetica-Bold');
+        doc.text(`${teacherName} — ${subjectName}`, 52, currentY + 6, { width: pageW - 20 });
+
+        doc.fillColor(gray).fontSize(8).font('Helvetica');
+        let commentText = c.comment || '';
+        if (commentText.length > 100) commentText = commentText.substring(0, 97) + '...';
+        doc.text(commentText, 52, currentY + 19, { width: pageW - 24 });
+
+        currentY += 42;
       }
     }
 
@@ -531,6 +670,8 @@ router.get('/bulletin/pdf', async (req: Request, res: Response, next: NextFuncti
       doc.switchToPage(i);
       doc.fillColor(gray).fontSize(7).font('Helvetica');
       doc.text(`Bulletin généré le ${new Date().toLocaleDateString('fr-FR')} — Page ${i + 1}/${pages.count}`, 40, doc.page.height - 30, { align: 'center', width: pageW });
+      doc.fillColor(blueLight).fontSize(6);
+      doc.text('OMNIA — Plateforme éducative intelligente', 40, doc.page.height - 18, { align: 'center', width: pageW });
     }
 
     doc.end();
@@ -543,7 +684,10 @@ router.get('/bulletin/pdf', async (req: Request, res: Response, next: NextFuncti
     res.setHeader('Content-Length', pdfBuffer.length);
     return res.send(pdfBuffer);
 
-  } catch (err) { return next(err); }
+  } catch (err) {
+    console.error('PDF Error:', err);
+    return next(err);
+  }
 });
 
 router.patch('/:id', authorize('teacher', 'admin'), async (req: Request, res: Response, next: NextFunction) => {
@@ -568,7 +712,6 @@ router.delete('/:id', authorize('teacher', 'admin'), async (req: Request, res: R
   } catch (err) { return next(err); }
 });
 
-// POST /grades/comments - avec academicYearId optionnel
 router.post('/comments', authorize('teacher', 'admin'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = z.object({
