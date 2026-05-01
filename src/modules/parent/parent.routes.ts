@@ -59,7 +59,7 @@ async function getParentChildren(profileId: string): Promise<any[]> {
   
   // 3. Récupérer les détails des étudiants
   const studentIds = links.map((link: any) => link.student_id).join(',');
-  const studentsRes = await fetch(`${SUPABASE_URL}/rest/v1/students?id=in.(${studentIds})&select=*,profiles:profile_id(first_name,last_name)`, {
+  const studentsRes = await fetch(`${SUPABASE_URL}/rest/v1/students?id=in.(${studentIds})&select=*,profiles:profile_id(id,first_name,last_name,avatar_url)`, {
     headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
   });
   const students = await studentsRes.json() as any[];

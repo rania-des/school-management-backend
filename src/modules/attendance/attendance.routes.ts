@@ -14,10 +14,47 @@ router.use(authenticate);
 // Ajoutez QR_JWT_SECRET dans votre .env  (ex: QR_JWT_SECRET=un_secret_solide_ici)
 const QR_SECRET = process.env.QR_JWT_SECRET || 'qr_fallback_secret_change_me';
 
+const normalizeDay = (day: any) => String(day ?? '').trim().toLowerCase();
+const dateMatchesSlotDay = (date: string, slotDay: any) => {
+  const jsDay = new Date(date + 'T12:00:00').getDay();
+  const isoDay = jsDay === 0 ? 7 : jsDay;
+  const names: Record<number, string[]> = {
+    1: ['1', 'mon', 'monday', 'lundi'],
+    2: ['2', 'tue', 'tuesday', 'mardi'],
+    3: ['3', 'wed', 'wednesday', 'mercredi'],
+    4: ['4', 'thu', 'thursday', 'jeudi'],
+    5: ['5', 'fri', 'friday', 'vendredi'],
+    6: ['6', 'sat', 'saturday', 'samedi'],
+    7: ['0', '7', 'sun', 'sunday', 'dimanche'],
+  };
+  return names[isoDay].includes(normalizeDay(slotDay));
+};
+
+const findScheduleSlotForAttendance = async (params: {
+  classId: string;
+  date: string;
+  teacherId?: string | null;
+  subjectId?: string | null;
+}) => {
+  let query = supabaseAdmin
+    .from('schedule_slots')
+    .select('id, class_id, teacher_id, subject_id, day_of_week, start_time, end_time, room, subjects(id, name), classes(id, name)')
+    .eq('class_id', params.classId)
+    .eq('is_active', true);
+
+  if (params.teacherId) query = query.eq('teacher_id', params.teacherId);
+  if (params.subjectId) query = query.eq('subject_id', params.subjectId);
+
+  const { data, error } = await query;
+  if (error) return null;
+  return (data || []).find((slot: any) => dateMatchesSlotDay(params.date, slot.day_of_week)) || null;
+};
+
 const attendanceSchema = z.object({
   studentId: z.string().uuid(),
   classId: z.string().uuid(),
   scheduleSlotId: z.string().uuid().optional(),
+  subjectId: z.string().uuid().optional(),
   date: z.string(),
   status: z.enum(['present', 'absent', 'late']),
   reason: z.string().optional(),
@@ -59,6 +96,7 @@ router.get('/teacher/classes', authorize('teacher', 'admin'), async (req: Reques
         });
       }
       classMap.get(key).slots.push({
+        id: slot.id,
         day: slot.day_of_week,
         start: slot.start_time,
         end: slot.end_time,
@@ -181,7 +219,7 @@ router.post(
         throw new AppError('QR code invalide.', 400);
       }
 
-      const { classId, teacherId, date } = decoded;
+      const { classId, teacherId, subjectId, date } = decoded;
 
       // Récupérer l'id étudiant
       const { data: student } = await supabaseAdmin
@@ -196,6 +234,8 @@ router.post(
       if (student.class_id !== classId) {
         throw new AppError('Vous n\'appartenez pas à cette classe.', 403);
       }
+
+      const matchedSlot = await findScheduleSlotForAttendance({ classId, subjectId, teacherId, date });
 
       // Upsert présence (évite les doublons) - Version manuelle sans onConflict
       // Vérifier si une entrée existe déjà
@@ -214,7 +254,7 @@ router.post(
         // Mettre à jour
         const res = await supabaseAdmin
           .from('attendance')
-          .update({ status: 'present', reason: 'QR scan', updated_at: new Date().toISOString() })
+          .update({ status: 'present', reason: 'QR scan', schedule_slot_id: matchedSlot?.id || null, updated_at: new Date().toISOString() })
           .eq('id', existing.id)
           .select()
           .single();
@@ -226,6 +266,7 @@ router.post(
           student_id: student.id,
           class_id:   classId,
           teacher_id: teacherId,
+          schedule_slot_id: matchedSlot?.id || null,
           date,
           status:     'present' as const,
           reason:     'QR scan',
@@ -264,7 +305,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
 
     let query = supabaseAdmin
       .from('attendance')
-      .select('*, students(id, student_number, profile_id, profiles(first_name, last_name)), classes(*), teachers(*)')
+      .select('*, students(id, student_number, profile_id, profiles(first_name, last_name)), classes(*), teachers(*), schedule_slots(id, class_id, teacher_id, subject_id, day_of_week, start_time, end_time, room, subjects(id, name), classes(id, name))')
       .order('date', { ascending: false })
       .limit(Number(limit));
 
@@ -304,7 +345,17 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
       throw new AppError(`Failed to fetch attendance: ${error.message}`, 500);
     }
 
-    return res.json(successResponse(data || []));
+    const enrichedData = await Promise.all((data || []).map(async (record: any) => {
+      if (record.schedule_slots || !record.class_id || !record.date) return record;
+      const matchedSlot = await findScheduleSlotForAttendance({
+        classId: record.class_id,
+        date: record.date,
+        teacherId: record.teacher_id,
+      });
+      return matchedSlot ? { ...record, schedule_slots: matchedSlot } : record;
+    }));
+
+    return res.json(successResponse(enrichedData));
   } catch (err) {
     return next(err);
   }
@@ -323,16 +374,25 @@ router.post('/bulk', authorize('teacher', 'admin'), async (req: Request, res: Re
       .eq('profile_id', req.user!.id)
       .single();
 
-    const records = attendances.map((a) => ({
-      student_id:       a.studentId,
-      class_id:         a.classId,
-      schedule_slot_id: a.scheduleSlotId || null,
-      teacher_id:       teacher?.id || null,
-      date:             a.date,
-      status:           a.status,
-      reason:           a.reason || null,
-      created_at:       new Date().toISOString(),
-      updated_at:       new Date().toISOString(),
+    const records = await Promise.all(attendances.map(async (a) => {
+      const matchedSlot = a.scheduleSlotId ? null : await findScheduleSlotForAttendance({
+        classId: a.classId,
+        subjectId: a.subjectId || null,
+        teacherId: teacher?.id || null,
+        date: a.date,
+      });
+
+      return {
+        student_id:       a.studentId,
+        class_id:         a.classId,
+        schedule_slot_id: a.scheduleSlotId || matchedSlot?.id || null,
+        teacher_id:       teacher?.id || null,
+        date:             a.date,
+        status:           a.status,
+        reason:           a.reason || null,
+        created_at:       new Date().toISOString(),
+        updated_at:       new Date().toISOString(),
+      };
     }));
 
     const { data, error } = await supabaseAdmin
