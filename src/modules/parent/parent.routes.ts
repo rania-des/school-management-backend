@@ -337,6 +337,58 @@ router.post('/attendance/:attendanceId/justify', upload.single('justification_pd
 });
 
 // =============================================================================
+// DISCIPLINE WARNINGS (NOUVELLE ROUTE)
+// =============================================================================
+
+// GET /api/v1/parent/discipline/warnings?childId=
+router.get('/discipline/warnings', async (req, res, next) => {
+  try {
+    const { childId } = req.query;
+    const SUPABASE_URL = 'https://wlgclriinxtyctaadiql.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2Nscmlpbnh0eWN0YWFkaXFsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAzNzA2NywiZXhwIjoyMDg3NjEzMDY3fQ.Nkny8TqAH40_E8KoVQbBgtVg7L3fWnmP0eB208iLmp4';
+    const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
+
+    if (!childId) throw new AppError('childId est requis', 400);
+
+    // Vérifier que l'enfant appartient au parent
+    const children = await getParentChildren(req.user!.id);
+    const hasChild = children.some((c: any) => c.student_id === childId);
+    if (!hasChild) throw new AppError('Accès non autorisé à cet enfant', 403);
+
+    // Récupérer infos étudiant (nom + classe)
+    const studentRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/students?id=eq.${childId}&select=id,profile_id,profiles:profile_id(first_name,last_name),classes:class_id(name)`,
+      { headers: H }
+    );
+    const studentArr = (await studentRes.json()) as any[];
+    const student = studentArr[0];
+    const studentName = `${student?.profiles?.first_name || ''} ${student?.profiles?.last_name || ''}`.trim();
+    const className = student?.classes?.name || '';
+
+    const url = `${SUPABASE_URL}/rest/v1/discipline_warnings?student_id=eq.${childId}&select=id,student_id,type,reason,date,teachers:teacher_id(profiles:profile_id(first_name,last_name))&order=date.desc`;
+
+    const resData = await fetch(url, { headers: H });
+    if (!resData.ok) return res.json(successResponse([]));
+
+    const raw = (await resData.json()) as any[];
+
+    const warnings = (raw || []).map((w: any) => ({
+      id:          w.id,
+      studentId:   w.student_id,
+      profileId:   student?.profile_id || '',
+      studentName,
+      className,
+      type:        w.type || 'warning',
+      reason:      w.reason || '',
+      date:        w.date,
+      teacherName: `${w.teachers?.profiles?.first_name || ''} ${w.teachers?.profiles?.last_name || ''}`.trim(),
+    }));
+
+    return res.json(successResponse(warnings));
+  } catch (err) { next(err); }
+});
+
+// =============================================================================
 // DEVOIRS (ASSIGNMENTS)
 // =============================================================================
 
@@ -805,6 +857,7 @@ router.get('/my-id', async (req: Request, res: Response, next: NextFunction) => 
     return next(err);
   }
 })
+
 // GET /parent/student-parent/:studentId - récupère le parent d'un étudiant
 router.get('/student-parent/:studentId', async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -871,4 +924,4 @@ router.get('/children/:childId/payments', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-export default router
+export default router;

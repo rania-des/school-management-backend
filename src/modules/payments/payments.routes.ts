@@ -107,22 +107,21 @@ router.get('/stats', authorize('admin'), async (req: Request, res: Response, nex
   } catch (err) { return next(err); }
 });
 
-// GET /payments/:id/receipt
+// GET /payments/:id/receipt — PDF style bulletin (FIXED)
 router.get('/:id/receipt', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const paymentId = req.params.id;
-    
-    // Récupérer le paiement avec les infos de l'élève
+
     const { data: paymentData, ok } = await sbGet(
       `payments?id=eq.${paymentId}&select=*,students(id,profiles(first_name,last_name,email))`
     );
-    
+
     if (!ok || !paymentData || (Array.isArray(paymentData) && paymentData.length === 0)) {
       throw new AppError('Paiement non trouvé', 404);
     }
-    
+
     const payment = Array.isArray(paymentData) ? paymentData[0] : paymentData;
-    
+
     // Vérifier les droits d'accès
     if (req.user!.role === 'parent') {
       const { data: parents } = await sbGet(`parents?profile_id=eq.${req.user!.id}&select=id`);
@@ -139,79 +138,121 @@ router.get('/:id/receipt', async (req: Request, res: Response, next: NextFunctio
     } else if (req.user!.role !== 'admin') {
       throw new AppError('Accès non autorisé', 403);
     }
-    
-    // Générer le PDF
-    const doc = new PDFDocument({ margin: 50, size: 'A4' });
-    
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="recu-paiement-${paymentId.substring(0,8)}.pdf"`);
-    
-    doc.pipe(res);
-    
-    // Logo et en-tête
-    doc.fontSize(20).font('Helvetica-Bold').text('ECOLE PRIMAIRE', { align: 'center' });
-    doc.fontSize(12).font('Helvetica').text('Excellence et Savoir', { align: 'center' });
-    doc.moveDown();
-    doc.fontSize(14).font('Helvetica-Bold').text('REÇU DE PAIEMENT', { align: 'center' });
-    doc.moveDown();
-    
-    // Ligne de séparation
-    doc.strokeColor('#cccccc').lineWidth(1).moveTo(50, doc.y).lineTo(550, doc.y).stroke();
-    doc.moveDown();
-    
-    // Informations du reçu
-    doc.fontSize(10).font('Helvetica');
-    doc.text(`N° Reçu: ${paymentId.substring(0,8)}`, { align: 'right' });
-    doc.text(`Date d'émission: ${new Date().toLocaleDateString('fr-FR')}`, { align: 'right' });
-    doc.moveDown();
-    
-    // Informations élève
-    doc.fontSize(12).font('Helvetica-Bold').text('INFORMATIONS ÉLÈVE');
-    doc.fontSize(10).font('Helvetica');
-    const studentProfile = payment.students?.profiles || {};
-    doc.text(`Nom et prénom: ${studentProfile.first_name || ''} ${studentProfile.last_name || ''}`);
-    doc.text(`Email: ${studentProfile.email || '-'}`);
-    doc.moveDown();
-    
-    // Détails du paiement
-    doc.fontSize(12).font('Helvetica-Bold').text('DÉTAILS DU PAIEMENT');
-    doc.fontSize(10).font('Helvetica');
-    
+
+    // ── Générer le PDF style bulletin ──
+    const doc = new PDFDocument({ size: 'A4', margin: 40, bufferPages: true });
+    const chunks: Buffer[] = [];
+    doc.on('data', (chunk: Buffer) => chunks.push(chunk));
+    const pdfPromise = new Promise<Buffer>((resolve) => {
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+    });
+
+    const pageW = doc.page.width - 80;
+    const blueDark  = '#60A5FA';
+    const blueLight = '#93C5FD';
+    const textDark  = '#1E4078';
+    const gray      = '#6B7280';
+    const lightGray = '#F3F4F6';
+
+    // ── HEADER bandeau bleu (identique bulletin) ──
+    doc.rect(0, 0, doc.page.width, 65).fill(blueDark);
+    doc.circle(57, 32, 18).fill('white');
+    doc.fillColor(textDark).fontSize(7).font('Helvetica-Bold')
+       .text('OMNIA', 39, 28, { width: 36, align: 'center' });
+    doc.fillColor('white').fontSize(16).font('Helvetica-Bold')
+       .text('REÇU DE PAIEMENT', 80, 18, { width: doc.page.width - 120, align: 'center' });
+    doc.fillColor('#A8C4E0').fontSize(9).font('Helvetica')
+       .text(`Émis le ${new Date().toLocaleDateString('fr-FR')}`, 80, 38,
+         { width: doc.page.width - 120, align: 'center' });
+    doc.moveTo(0, 65).lineTo(doc.page.width, 65).strokeColor(blueLight).lineWidth(2).stroke();
+
+    // ── Carte infos élève (identique bulletin) ──
+    const infoY = 80;
+    doc.roundedRect(40, infoY, pageW, 70, 8).fill(lightGray);
+    const sp = payment.students?.profiles || {};
+    doc.fillColor(textDark).fontSize(12).font('Helvetica-Bold')
+       .text(`Élève : ${sp.first_name || ''} ${sp.last_name || ''}`, 55, infoY + 12);
+    doc.fillColor(gray).fontSize(10).font('Helvetica')
+       .text(`Email : ${sp.email || '—'}`, 55, infoY + 32)
+       .text(`Réf. élève : ${payment.student_id?.substring(0, 8).toUpperCase() || '—'}`, 55, infoY + 48);
+
+    // Badge N° Reçu (à droite, comme badge rang du bulletin)
+    const badgeX = 40 + pageW - 95;
+    doc.roundedRect(badgeX, infoY + 8, 85, 50, 6).fill(blueDark);
+    doc.fillColor('white').fontSize(8).font('Helvetica-Bold')
+       .text('N° REÇU', badgeX, infoY + 14, { width: 85, align: 'center' });
+    doc.fontSize(11)
+       .text(paymentId.substring(0, 8).toUpperCase(), badgeX, infoY + 27, { width: 85, align: 'center' });
+
+    // ── Titre section détails ──
+    const tableY = infoY + 90;
+    doc.roundedRect(40, tableY, pageW, 28, 4).fill(blueDark);
+    doc.fillColor('white').fontSize(9).font('Helvetica-Bold')
+       .text('CHAMP', 48, tableY + 8)
+       .text('DÉTAIL', 300, tableY + 8);
+
     const typeLabels: Record<string, string> = {
-      tuition: 'Scolarité',
-      canteen: 'Cantine',
-      trip: 'Sortie scolaire',
-      activity: 'Activité',
-      other: 'Autre'
+      tuition: 'Scolarité', canteen: 'Cantine', trip: 'Sortie scolaire',
+      activity: 'Activité', other: 'Autre',
     };
-    
-    doc.text(`Type: ${typeLabels[payment.type] || payment.type}`);
-    doc.text(`Description: ${payment.description || '-'}`);
-    doc.text(`Montant: ${payment.amount} TND`);
-    doc.text(`Statut: ${payment.status === 'paid' ? '✅ PAYÉ' : payment.status.toUpperCase()}`);
-    if (payment.due_date) {
-      doc.text(`Date d'échéance: ${new Date(payment.due_date).toLocaleDateString('fr-FR')}`);
+    const methodLabel = payment.payment_method === 'online' ? 'Paiement en ligne' : 'En espèces';
+
+    const rows: [string, string][] = [
+      ['Type de paiement',    typeLabels[payment.type] || payment.type],
+      ['Description',         payment.description || '—'],
+      ['Méthode de paiement', methodLabel],
+      ['Date d\'échéance',    payment.due_date ? new Date(payment.due_date).toLocaleDateString('fr-FR') : '—'],
+      ['Date de paiement',    payment.paid_at  ? new Date(payment.paid_at).toLocaleDateString('fr-FR')  : '—'],
+      ['Statut',              payment.status === 'paid' ? 'PAYÉ' : payment.status.toUpperCase()],
+    ];
+
+    let currentY = tableY + 28;
+    for (let i = 0; i < rows.length; i++) {
+      const [label, value] = rows[i];
+      const rowH = 28;
+      if (i % 2 === 0) doc.rect(40, currentY, pageW, rowH).fill('#F9FAFB');
+      doc.fillColor(gray).fontSize(9).font('Helvetica').text(label, 48, currentY + 8);
+      const isStatut = label === 'Statut';
+      const valColor = isStatut
+        ? (payment.status === 'paid' ? '#059669' : '#D97706')
+        : textDark;
+      doc.fillColor(valColor).fontSize(9).font('Helvetica-Bold')
+         .text(value, 300, currentY + 8, { width: pageW - 268, align: 'right' });
+      doc.moveTo(40, currentY + rowH).lineTo(40 + pageW, currentY + rowH)
+         .strokeColor('#E5E7EB').lineWidth(0.5).stroke();
+      currentY += rowH;
     }
-    if (payment.paid_at) {
-      doc.text(`Date de paiement: ${new Date(payment.paid_at).toLocaleDateString('fr-FR')}`);
+
+    // ── Montant total (identique bandeau moyenne générale du bulletin) ──
+    currentY += 10;
+    doc.roundedRect(40, currentY, pageW, 44, 6).fill(blueDark);
+    doc.fillColor('white').fontSize(12).font('Helvetica-Bold')
+       .text('MONTANT TOTAL RÉGLÉ', 56, currentY + 13);
+    const amtColor = '#4ADE80';
+    doc.fillColor(amtColor).fontSize(17)
+       .text(`${payment.amount} TND`, 56, currentY + 11,
+         { align: 'right', width: pageW - 32 });
+
+    // ── Footer (identique bulletin) ──
+    const pages = doc.bufferedPageRange();
+    for (let i = 0; i < pages.count; i++) {
+      doc.switchToPage(i);
+      doc.fillColor(gray).fontSize(7).font('Helvetica')
+         .text(`Reçu généré le ${new Date().toLocaleDateString('fr-FR')} — Page ${i + 1}/${pages.count}`,
+           40, doc.page.height - 30, { align: 'center', width: pageW });
+      doc.fillColor(blueLight).fontSize(6)
+         .text('OMNIA — Plateforme éducative intelligente', 40, doc.page.height - 18,
+           { align: 'center', width: pageW });
     }
-    doc.moveDown();
-    
-    // Ligne de séparation
-    doc.strokeColor('#cccccc').lineWidth(1).moveTo(50, doc.y).lineTo(550, doc.y).stroke();
-    doc.moveDown();
-    
-    // Montant total en gros
-    doc.fontSize(16).font('Helvetica-Bold').text(`Montant total réglé: ${payment.amount} TND`, { align: 'center' });
-    doc.moveDown();
-    
-    // Mentions légales
-    doc.fontSize(8).font('Helvetica');
-    doc.text('Ce document fait office de reçu officiel. Merci de conserver ce justificatif.', { align: 'center' });
-    doc.text(`Généré le ${new Date().toLocaleString('fr-FR')}`, { align: 'center' });
-    
+
     doc.end();
-    
+    const pdfBuffer = await pdfPromise;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition',
+      `attachment; filename="recu-paiement-${paymentId.substring(0, 8)}.pdf"`);
+    res.setHeader('Content-Length', pdfBuffer.length);
+    return res.send(pdfBuffer);
+
   } catch (err) { return next(err); }
 });
 
@@ -239,6 +280,8 @@ router.patch('/:id/mark-paid', authorize('admin', 'parent'), async (req: Request
     const { data, ok } = await sbPatch(`payments?id=eq.${req.params.id}`, {
       status: 'paid',
       paid_at: new Date().toISOString(),
+      payment_method: req.body.paymentMethod || 'cash',
+      card_last4: req.body.cardLast4 || null,
     });
     if (!ok || !data) throw new AppError('Payment not found', 404);
     return res.json(successResponse(data));
