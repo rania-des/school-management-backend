@@ -437,7 +437,7 @@ router.patch('/:id/confirm', authorize('teacher', 'admin', 'parent'), async (req
     if (req.user!.role === 'parent') {
       const pid = await resolveParentId(req.user!.id);
       if (!pid || meeting.parent_id !== pid) throw new AppError('Forbidden', 403);
-      if (meeting.status !== 'rescheduled') throw new AppError('Cannot confirm: waiting for rescheduling', 400);
+      // Allow parent to confirm both 'requested' and 'rescheduled' meetings
     }
 
     const { data, ok } = await sbPatch(`meetings?id=eq.${req.params.id}`, {
