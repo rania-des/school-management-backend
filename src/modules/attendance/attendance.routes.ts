@@ -6,6 +6,7 @@ import { supabaseAdmin } from '../../config/supabase';
 import { authenticate, authorize } from '../../middleware/auth.middleware';
 import { AppError } from '../../middleware/error.middleware';
 import { successResponse } from '../../utils/pagination';
+import { createNotification, getStudentParentProfileIds } from '../../utils/notifications';
 
 const router = Router();
 router.use(authenticate);
@@ -403,6 +404,73 @@ router.post('/bulk', authorize('teacher', 'admin'), async (req: Request, res: Re
     if (error) {
       console.error('ATTENDANCE UPSERT ERROR:', JSON.stringify(error, null, 2));
       throw new AppError(`Failed to save attendance: ${error.message}`, 500);
+    }
+
+    // ── Envoyer une notification aux parents pour chaque absence/retard ──
+    if (data && data.length > 0) {
+      const absentsAndLates = data.filter((r: any) =>
+        r.status === 'absent' || r.status === 'late'
+      );
+
+      await Promise.allSettled(absentsAndLates.map(async (record: any) => {
+        try {
+          // Récupérer le profil de l'élève pour le nom
+          const { data: student } = await supabaseAdmin
+            .from('students')
+            .select('profiles(first_name, last_name), profile_id')
+            .eq('id', record.student_id)
+            .single();
+
+          const firstName = (student as any)?.profiles?.first_name || '';
+          const lastName  = (student as any)?.profiles?.last_name  || '';
+          const studentName = `${firstName} ${lastName}`.trim() || 'votre enfant';
+
+          const isAbsent = record.status === 'absent';
+          const dateFormatted = new Date(record.date).toLocaleDateString('fr-FR', {
+            weekday: 'long', day: 'numeric', month: 'long'
+          });
+
+          // Notifier l'élève
+          if ((student as any)?.profile_id) {
+            await createNotification({
+              recipientId: (student as any).profile_id,
+              type:        'absence',
+              title:       isAbsent ? 'Absence enregistrée' : 'Retard enregistré',
+              body:        isAbsent
+                ? `Votre absence du ${dateFormatted} a été enregistrée.`
+                : `Votre retard du ${dateFormatted} a été enregistré.`,
+              data: {
+                date:       record.date,        // ← date exacte pour la navigation
+                student_id: record.student_id,
+                status:     record.status,
+              },
+            });
+          }
+
+          // Notifier les parents
+          const parentProfileIds = await getStudentParentProfileIds(record.student_id);
+          await Promise.allSettled(parentProfileIds.map((parentId: string) =>
+            createNotification({
+              recipientId: parentId,
+              type:        'absence',
+              title:       isAbsent
+                ? `Absence de ${studentName}`
+                : `Retard de ${studentName}`,
+              body:        isAbsent
+                ? `${studentName} était absent(e) le ${dateFormatted}.`
+                : `${studentName} était en retard le ${dateFormatted}.`,
+              data: {
+                date:       record.date,        // ← date exacte pour la navigation
+                student_id: record.student_id,
+                status:     record.status,
+              },
+            })
+          ));
+        } catch (notifErr) {
+          // Ne pas bloquer la réponse si la notification échoue
+          console.error('Notification error for student', record.student_id, notifErr);
+        }
+      }));
     }
 
     return res.status(201).json(successResponse(data, `${data?.length} attendance records saved`));
