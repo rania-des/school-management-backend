@@ -156,9 +156,9 @@ router.get('/history', authorize('teacher', 'admin'), async (req: Request, res: 
 });
 
 // =============================================================================
-// POST /announcements - Créer une annonce
+// POST /announcements - Créer une annonce (ADMIN ONLY)
 // =============================================================================
-router.post('/', authorize('teacher', 'admin'), async (req: Request, res: Response, next: NextFunction) => {
+router.post('/', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = announcementSchema.parse(req.body);
     const now = new Date().toISOString();
@@ -202,9 +202,9 @@ router.post('/', authorize('teacher', 'admin'), async (req: Request, res: Respon
 });
 
 // =============================================================================
-// PATCH /announcements/:id - Modifier une annonce
+// PATCH /announcements/:id - Modifier une annonce (ADMIN ONLY)
 // =============================================================================
-router.patch('/:id', authorize('teacher', 'admin'), async (req: Request, res: Response, next: NextFunction) => {
+router.patch('/:id', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
     const updates = req.body;
@@ -228,9 +228,9 @@ router.patch('/:id', authorize('teacher', 'admin'), async (req: Request, res: Re
 });
 
 // =============================================================================
-// DELETE /announcements/:id - Supprimer une annonce
+// DELETE /announcements/:id - Supprimer une annonce (ADMIN ONLY)
 // =============================================================================
-router.delete('/:id', authorize('teacher', 'admin'), async (req: Request, res: Response, next: NextFunction) => {
+router.delete('/:id', authorize('admin'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
     const { ok } = await sbDelete('announcements', id);
