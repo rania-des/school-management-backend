@@ -421,7 +421,10 @@ export class AuthService {
         const { data } = await supabaseAdmin.from('teachers').select('*').eq('profile_id', userId).single();
         roleData = data; roleId = data?.id;
       } else if (profile['role'] === 'student') {
-        const { data } = await supabaseAdmin.from('students').select('*, classes(name, levels(name))').eq('profile_id', userId).single();
+        const { data } = await supabaseAdmin.from('students')
+          .select('*, classes(name, levels(name)), parent_student(*, parents(*, profiles(first_name, last_name)))')
+          .eq('profile_id', userId)
+          .single();
         roleData = data; roleId = data?.id;
       } else if (profile['role'] === 'parent') {
         const { data } = await supabaseAdmin.from('parents').select('*, parent_student(*, students(*, profiles(first_name, last_name), classes(name)))').eq('profile_id', userId).single();
