@@ -49,3 +49,22 @@ export const updatePasswordSchema = z.object({
       'Le mot de passe doit contenir majuscule, minuscule et chiffre'
     ),
 });
+
+export const generate2FASchema = z.object({}); // rien à envoyer
+
+export const activate2FASchema = z.object({
+  token: z.string().length(6, 'Le code doit contenir 6 chiffres'),
+});
+
+// Auth schema - section 2FA
+export const verify2FALoginSchema = z.object({
+  challengeId: z.string().min(1, 'Challenge ID requis'),
+  token: z.string().regex(
+    /^[0-9]{6}$|^[A-Z0-9]{8}$/,
+    'Le code doit être soit 6 chiffres, soit 8 caractères alphanumériques'
+  ),
+});
+
+export const disable2FASchema = z.object({
+  token: z.string().length(6),
+});

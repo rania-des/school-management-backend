@@ -6,6 +6,10 @@ import {
   resetPasswordSchema,
   updatePasswordSchema,
   resetPasswordWithTokenSchema,
+  generate2FASchema,       
+  activate2FASchema,       
+  verify2FALoginSchema,    
+  disable2FASchema,       
 } from './auth.schema';
 
 export class AuthController {
@@ -73,6 +77,37 @@ export class AuthController {
       const result = await authService.getMe(req.user!.id, req.accessToken!);
       return res.json(result);
     } catch (err) { return next(err); }
+  }
+  
+  async generate2FASecret(req: Request, res: Response, next: NextFunction) {
+    try {
+      const result = await authService.generate2FASecret(req.user!.id, req.user!.email);
+      return res.json(result);
+    } catch (err) { next(err); }
+  }
+  
+  async activate2FA(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { token } = activate2FASchema.parse(req.body);
+      const result = await authService.activate2FA(req.user!.id, token);
+      return res.json(result);
+    } catch (err) { next(err); }
+  }
+  
+  async verify2FALogin(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { challengeId, token } = verify2FALoginSchema.parse(req.body);
+      const result = await authService.complete2FALogin(challengeId, token);
+      return res.json(result);
+    } catch (err) { next(err); }
+  }
+  
+  async disable2FA(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { token } = disable2FASchema.parse(req.body);
+      const result = await authService.disable2FA(req.user!.id, token);
+      return res.json(result);
+    } catch (err) { next(err); }
   }
 }
 
